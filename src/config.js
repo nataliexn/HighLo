@@ -1,33 +1,32 @@
 // -----------------------------------------------------------------------
 // HighLo endpoint configuration
 // -----------------------------------------------------------------------
-// Everything the Raspberry Pi / computer-vision pipeline will eventually
-// feed into the UI is centralized here. Right now every value is either
-// `null` (feature disabled -> UI falls back to the grey placeholder / mock
-// data) or points at a local mock. Swap these for real values and nothing
-// else in the app needs to change.
+// Where the camera and detections come from. Every value is optional: when
+// nothing is set, HighLo shows its built-in mock table so every screen still
+// looks alive.
+//
+// The normal way to connect a phone camera is the "Camera" button in the top
+// bar (it asks for the camera server's address and access token and remembers
+// them in this browser). The two VITE_ values below are only a shortcut for
+// local development - anything starting with VITE_ is copied into the public
+// website files, so don't put a real token there for a deployed site.
 
 const config = {
-  // MJPEG / HLS / WebRTC URL for the raw camera feed. When null, the
-  // CameraFeed component renders the grey placeholder box instead of a
-  // <video>/<img> element.
-  // Example once wired up: "http://raspberrypi.local:8080/stream.mjpg"
-  CAMERA_STREAM_URL: null,
+  // Address printed by the camera server, e.g. "https://192.168.1.20:8443".
+  // Set in a .env file as VITE_CAMERA_SERVER_URL.
+  CAMERA_SERVER_URL: import.meta.env.VITE_CAMERA_SERVER_URL || null,
 
-  // WebSocket endpoint that pushes live detection JSON: hand bounding
-  // boxes, per-seat card detections, confidence scores, gesture events,
-  // occupancy changes, and shuffle events. When null, useCameraSocket()
-  // just replays mockData so the UI still looks alive during development.
-  // Example once wired up: "ws://raspberrypi.local:8765/detections"
-  DETECTION_SOCKET_URL: null,
+  // The server's viewer access token. Set as VITE_CAMERA_SERVER_TOKEN.
+  CAMERA_SERVER_TOKEN: import.meta.env.VITE_CAMERA_SERVER_TOKEN || null,
+
+  // Optional: a plain MJPEG/HLS stream from some other camera. The feed panel
+  // shows it instead of the grey placeholder. (The camera server's own stream
+  // is picked up automatically and takes priority while it is live.)
+  CAMERA_STREAM_URL: null,
 
   // REST base for auth / gameplay history / analysis reports. When null,
   // auth + history calls are simulated in-memory (see state/AppStateContext).
   API_BASE_URL: null,
-
-  // How often (ms) to poll DETECTION_SOCKET_URL if the backend only
-  // supports polling instead of a persistent socket.
-  DETECTION_POLL_INTERVAL_MS: 1000,
 };
 
 export default config;

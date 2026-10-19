@@ -1,7 +1,7 @@
 // Default, non-empty snapshot of "what the camera would be seeing" right
 // now. Everything here is a plausible in-progress hand so the dashboard
 // reads as live rather than blank. Replace with real detection payloads
-// once DETECTION_SOCKET_URL (see src/config.js) is wired to the Pi.
+// once a phone camera is paired through the camera server (see README).
 import { hiLoValue } from "../lib/count.js";
 
 export const SEAT_COUNT = 6;

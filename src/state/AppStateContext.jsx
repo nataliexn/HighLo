@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from "
 import config from "../config.js";
 import { handValue } from "../components/Card.jsx";
 import { computeCountStats, hiLoValue, TOTAL_DECKS } from "../lib/count.js";
+import { connectCameraLink } from "../lib/cameraLink.js";
 import {
   defaultOccupancy,
   defaultPlayers,
@@ -15,6 +16,36 @@ import {
 } from "./mockData.js";
 
 const AppStateContext = createContext(null);
+// Camera-link data changes many times a second (detection boxes), so it
+// lives in its own context: only the components that draw it re-render.
+const CameraLinkContext = createContext(null);
+
+const LINK_STORAGE_KEY = "highlo:cameraLink";
+const OFFLINE_LINK = {
+  serverOnline: false, // HighLo can reach the camera server
+  phoneOnline: false, // a phone is paired with the server
+  cameraOpen: false, // ...and its camera is on and sending frames
+  modelLoaded: false,
+  modelName: null,
+  width: 0,
+  height: 0,
+  fps: 0,
+  streamUrl: null,
+  boxes: [],
+  problem: null, // "token" | "origin" | "address" | null
+};
+
+function loadLinkSettings() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(LINK_STORAGE_KEY));
+    if (saved && typeof saved.serverAddress === "string" && typeof saved.token === "string") {
+      return saved;
+    }
+  } catch {
+    // nothing saved, or unreadable: fall back to the build-time shortcut
+  }
+  return { serverAddress: config.CAMERA_SERVER_URL || "", token: config.CAMERA_SERVER_TOKEN || "" };
+}
 
 const SEAT_STORAGE_KEY = "highlo:selectedSeat";
 
@@ -82,7 +113,11 @@ export function AppStateProvider({ children }) {
   const [shoeStats, setShoeStats] = useState(() => loadLocal("shoeStats", defaultShoeStats));
   const [analysis, setAnalysis] = useState(defaultAnalysis);
   const [midShoeJoin] = useState(defaultMidShoeJoin);
-  const [cameraConnected, setCameraConnected] = useState(Boolean(config.CAMERA_STREAM_URL));
+  // Phone camera link (see lib/cameraLink.js). Settings live in this browser.
+  const [linkSettings, setLinkSettings] = useState(loadLinkSettings);
+  const [cameraLink, setCameraLink] = useState(OFFLINE_LINK);
+  const live = cameraLink.serverOnline && cameraLink.phoneOnline && cameraLink.cameraOpen;
+  const cameraConnected = live || Boolean(config.CAMERA_STREAM_URL);
   const [isCountHistoryVisible, setIsCountHistoryVisible] = useState(true);
 
   // Controls whether the Recommendation component shows every seat's
@@ -194,31 +229,93 @@ export function AppStateProvider({ children }) {
     }, 3000);
   }
 
-  // ---- Wire-up point for the Raspberry Pi detection socket ---------------
+  // ---- Phone camera link -------------------------------------------------
+  // Connects to the camera server whenever address + token are saved, and
+  // reconnects by itself. HighLo goes live the moment the server reports the
+  // phone online with its camera open; until then the mock table stays.
   useEffect(() => {
-    if (!config.DETECTION_SOCKET_URL) {
-      // No backend configured yet: keep serving the mock snapshot above.
-      return undefined;
+    setCameraLink(OFFLINE_LINK);
+    if (!linkSettings.serverAddress || !linkSettings.token) return undefined;
+
+    const link = connectCameraLink({
+      serverAddress: linkSettings.serverAddress,
+      token: linkSettings.token,
+      onEvent: (event) => {
+        switch (event.type) {
+          case "ready":
+            setCameraLink((prev) => ({ ...prev, serverOnline: true, streamUrl: event.streamUrl, problem: null }));
+            break;
+          case "closed":
+            setCameraLink((prev) => ({ ...OFFLINE_LINK, problem: prev.problem }));
+            break;
+          case "rejected":
+            setCameraLink({ ...OFFLINE_LINK, problem: event.code === 4401 ? "token" : "origin" });
+            break;
+          case "invalid":
+            setCameraLink({ ...OFFLINE_LINK, problem: "address" });
+            break;
+          case "status":
+            // fps changes every second; ignore it so a steady stream doesn't re-render
+            setCameraLink((prev) => {
+              const next = {
+                ...prev,
+                phoneOnline: Boolean(event.phoneOnline),
+                cameraOpen: Boolean(event.cameraOpen),
+                modelLoaded: Boolean(event.modelLoaded),
+                modelName: event.modelName || null,
+                width: Number(event.width) || 0,
+                height: Number(event.height) || 0,
+                boxes: event.cameraOpen ? prev.boxes : [],
+              };
+              const same = ["phoneOnline", "cameraOpen", "modelLoaded", "modelName", "width", "height"].every(
+                (key) => prev[key] === next[key]
+              );
+              return same && next.boxes === prev.boxes ? prev : next;
+            });
+            break;
+          case "detections":
+            setCameraLink((prev) => (prev.cameraOpen ? { ...prev, boxes: Array.isArray(event.boxes) ? event.boxes : [] } : prev));
+            break;
+          case "state":
+            // Full table state from the server (see README "Connecting the camera").
+            if (event.occupancy) setOccupancy(event.occupancy);
+            if (event.players) setPlayers(event.players);
+            if (event.dealer) setDealer(event.dealer);
+            if (event.recommendation) setRecommendation(event.recommendation);
+            if (event.countHistory) setCountHistory(event.countHistory);
+            if (event.shoeStats) setShoeStats(event.shoeStats);
+            break;
+          default:
+            break;
+        }
+      },
+    });
+    return () => link.close();
+  }, [linkSettings]);
+
+  function saveLinkSettings(next) {
+    const clean = { serverAddress: next.serverAddress.trim(), token: next.token.trim() };
+    try {
+      window.localStorage.setItem(LINK_STORAGE_KEY, JSON.stringify(clean));
+    } catch {
+      // storage blocked: the link still works until the page is closed
     }
-    const socket = new WebSocket(config.DETECTION_SOCKET_URL);
-    socket.onopen = () => setCameraConnected(true);
-    socket.onclose = () => setCameraConnected(false);
-    socket.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data);
-        if (payload.occupancy) setOccupancy(payload.occupancy);
-        if (payload.players) setPlayers(payload.players);
-        if (payload.dealer) setDealer(payload.dealer);
-        if (payload.recommendation) setRecommendation(payload.recommendation);
-        if (payload.countHistory) setCountHistory(payload.countHistory);
-        if (payload.shoeStats) setShoeStats(payload.shoeStats);
-      } catch (err) {
-        // Malformed frame from the Pi — ignore and keep last-known-good state.
-        console.warn("HighLo: could not parse detection payload", err);
-      }
-    };
-    return () => socket.close();
-  }, []);
+    setLinkSettings(clean);
+  }
+
+  function clearLinkSettings() {
+    try {
+      window.localStorage.removeItem(LINK_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+    setLinkSettings({ serverAddress: "", token: "" });
+  }
+
+  const linkValue = useMemo(
+    () => ({ ...cameraLink, live, settings: linkSettings, saveLinkSettings, clearLinkSettings }),
+    [cameraLink, live, linkSettings]
+  );
 
   const value = useMemo(
     () => ({
@@ -285,11 +382,21 @@ export function AppStateProvider({ children }) {
     ]
   );
 
-  return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
+  return (
+    <AppStateContext.Provider value={value}>
+      <CameraLinkContext.Provider value={linkValue}>{children}</CameraLinkContext.Provider>
+    </AppStateContext.Provider>
+  );
 }
 
 export function useAppState() {
   const ctx = useContext(AppStateContext);
   if (!ctx) throw new Error("useAppState must be used within AppStateProvider");
+  return ctx;
+}
+
+export function useCameraLink() {
+  const ctx = useContext(CameraLinkContext);
+  if (!ctx) throw new Error("useCameraLink must be used within AppStateProvider");
   return ctx;
 }

@@ -1,6 +1,7 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
 import { useAppState } from "../state/AppStateContext.jsx";
+import CameraStatusPill from "./CameraLink.jsx";
 
 /**
  * MobileHeader
@@ -18,6 +19,7 @@ export default function MobileHeader() {
         High<span>Lo</span>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+        <CameraStatusPill compact />
         <span className="hlo-nav__seat" style={{ fontSize: "0.72rem" }}>
           {isGuest ? "Guest" : username} · Seat {selectedSeat ?? "—"}
         </span>

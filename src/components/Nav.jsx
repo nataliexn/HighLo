@@ -1,6 +1,7 @@
 import React from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useAppState } from "../state/AppStateContext.jsx";
+import CameraStatusPill from "./CameraLink.jsx";
 
 export default function Nav() {
   const { selectedSeat, username, isGuest, logout } = useAppState();
@@ -30,6 +31,7 @@ export default function Nav() {
         </NavLink>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <CameraStatusPill />
         <span className="hlo-nav__seat">
           {isGuest ? "Guest" : username} · Seat {selectedSeat ?? "—"}
         </span>

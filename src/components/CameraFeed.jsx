@@ -1,6 +1,6 @@
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import config from "../config.js";
-import { useAppState } from "../state/AppStateContext.jsx";
+import { useAppState, useCameraLink } from "../state/AppStateContext.jsx";
 
 const CONFIDENCE_BORDER = {
   high: "var(--confidence-high)",
@@ -31,12 +31,64 @@ const SEAT_ANCHORS = {
 // arc — the one spot the seat anchors above deliberately leave empty.
 const DEALER_ANCHOR = { left: "50%", top: "16%" };
 
+// Confidence colour for a detection box.
+function boxColor(conf) {
+  if (conf >= 0.8) return CONFIDENCE_BORDER.high;
+  if (conf >= 0.6) return CONFIDENCE_BORDER.medium;
+  return CONFIDENCE_BORDER.low;
+}
+
+// Size of an element, kept up to date as it resizes.
+function useElementSize(ref) {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const update = () => setSize({ width: el.clientWidth, height: el.clientHeight });
+    update();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+  return size;
+}
+
+// Where a frame of the given size lands inside a container when it is shown
+// with object-fit: contain, so normalised (0-1) detection boxes line up
+// with the picture rather than with the letterbox bars around it.
+function fittedRect(container, frameWidth, frameHeight) {
+  if (!container.width || !container.height || !frameWidth || !frameHeight) return null;
+  const scale = Math.min(container.width / frameWidth, container.height / frameHeight);
+  const width = frameWidth * scale;
+  const height = frameHeight * scale;
+  return { left: (container.width - width) / 2, top: (container.height - height) / 2, width, height };
+}
+
 export default function CameraFeed() {
   const { players, selectedSeat, cameraConnected, dealer } = useAppState();
-  const streamUrl = config.CAMERA_STREAM_URL;
+  const link = useCameraLink();
+  const frameRef = useRef(null);
+  const frameSize = useElementSize(frameRef);
+
+  // The phone camera (through the camera server) wins while it is live;
+  // otherwise fall back to a plain stream URL, then to the placeholder.
+  const streamUrl = link.live ? link.streamUrl : config.CAMERA_STREAM_URL;
+  const rect = link.live ? fittedRect(frameSize, link.width, link.height) : null;
+
+  let offlineHint;
+  if (link.settings.serverAddress && link.settings.token) {
+    if (link.problem) offlineHint = "Check the Camera settings (top bar)";
+    else if (!link.serverOnline) offlineHint = "Camera server not reachable";
+    else if (!link.phoneOnline) offlineHint = "Waiting for the phone to connect";
+    else offlineHint = "Waiting for the phone to start its camera";
+  } else {
+    offlineHint = "Use the Camera button in the top bar to connect your phone";
+  }
 
   return (
     <div
+      ref={frameRef}
       className="hlo-camera"
       style={{
         position: "relative",
@@ -55,7 +107,7 @@ export default function CameraFeed() {
         <img
           src={streamUrl}
           alt="Live table feed"
-          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          style={{ width: "100%", height: "100%", objectFit: link.live ? "contain" : "cover" }}
         />
       ) : (
         <div
@@ -73,15 +125,53 @@ export default function CameraFeed() {
           <span style={{ fontFamily: "var(--font-display)", fontSize: "1.4rem", letterSpacing: "0.04em" }}>
             CAMERA FEED OFFLINE
           </span>
-          <span style={{ fontSize: "0.78rem" }}>
-            Waiting on stream at <code style={{ fontFamily: "var(--font-mono)" }}>CAMERA_STREAM_URL</code>
-          </span>
+          <span style={{ fontSize: "0.78rem" }}>{offlineHint}</span>
         </div>
       )}
 
+      {/* Real detections from the phone camera, drawn over the picture. */}
+      {rect &&
+        link.boxes.map((b, i) => {
+          const [x1, y1, x2, y2] = b.box;
+          return (
+            <div
+              key={i}
+              style={{
+                position: "absolute",
+                left: rect.left + x1 * rect.width,
+                top: rect.top + y1 * rect.height,
+                width: (x2 - x1) * rect.width,
+                height: (y2 - y1) * rect.height,
+                border: `2px solid ${boxColor(b.conf)}`,
+                borderRadius: 4,
+                pointerEvents: "none",
+              }}
+            >
+              <span
+                style={{
+                  position: "absolute",
+                  left: -2,
+                  bottom: "100%",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "0.62rem",
+                  padding: "1px 5px",
+                  borderRadius: 4,
+                  background: "rgba(27,28,29,0.85)",
+                  color: "var(--white)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {b.code || b.label} {Math.round(b.conf * 100)}%
+              </span>
+            </div>
+          );
+        })}
+
       {/* Dealer's own detection box — the one spot on the arc the seat
           anchors leave empty — so the dealer's hand is visibly tracked
-          too, not just the players'. */}
+          too, not just the players'. Mock layout: hidden once real video
+          is showing, since it wouldn't match what the camera sees. */}
+      {!link.live && (
       <div
         style={{
           position: "absolute",
@@ -113,12 +203,13 @@ export default function CameraFeed() {
           DEALER
         </span>
       </div>
+      )}
 
       {/* Bounding boxes + seat labels, overlaid on top of feed or placeholder.
           Sized in container-query units (cqw) rather than fixed pixels so
           the box — including its border — shrinks smoothly as the feed
           itself shrinks, instead of staying put and looking oversized. */}
-      {players.map((p) => {
+      {!link.live && players.map((p) => {
         if (!p.occupied) return null;
         const anchor = SEAT_ANCHORS[p.seat] || { left: "50%", top: "50%" };
         const isSelected = selectedSeat === p.seat;
@@ -180,7 +271,7 @@ export default function CameraFeed() {
         <span
           className={`hlo-confidence-dot hlo-confidence-dot--${cameraConnected ? "high" : "low"}`}
         />
-        {cameraConnected ? "LIVE" : "OFFLINE (MOCK DATA)"}
+        {cameraConnected ? (link.live && !link.modelLoaded ? "LIVE (video only)" : "LIVE") : "OFFLINE (MOCK DATA)"}
       </div>
     </div>
   );
