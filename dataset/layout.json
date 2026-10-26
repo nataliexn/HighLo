@@ -1,0 +1,55 @@
+{
+  "_note": "x, y are fractions of the board photo's width/height. angle = degrees clockwise from 'card upright'. Edit freely.",
+  "board_aspect": 1.6653,
+  "card_width": 0.075,
+  "seats": [
+    {
+      "x": 0.1387,
+      "y": 0.4876,
+      "angle": 33.8
+    },
+    {
+      "x": 0.2759,
+      "y": 0.6296,
+      "angle": 21.5
+    },
+    {
+      "x": 0.4317,
+      "y": 0.7062,
+      "angle": 5.6
+    },
+    {
+      "x": 0.5909,
+      "y": 0.6994,
+      "angle": -10.6
+    },
+    {
+      "x": 0.7425,
+      "y": 0.6107,
+      "angle": -27.2
+    },
+    {
+      "x": 0.8763,
+      "y": 0.4567,
+      "angle": -43.9
+    }
+  ],
+  "dealer": {
+    "x": 0.5,
+    "y": 0.235,
+    "x_jitter": 0.03,
+    "y_jitter": 0.02
+  },
+  "discard_pile": {
+    "x": 0.175,
+    "y": 0.16,
+    "jitter": 0.015,
+    "present": 0.65
+  },
+  "shoe": {
+    "x": 0.82,
+    "y": 0.15,
+    "jitter": 0.015,
+    "present": 0.9
+  }
+}

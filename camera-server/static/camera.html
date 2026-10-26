@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0e3d2d" />
+    <meta name="referrer" content="no-referrer" />
+    <title>HighLo Camera</title>
+    <link rel="stylesheet" href="/static/camera.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="brand">High<span>Lo</span> <small>Camera</small></header>
+
+      <section class="card" aria-live="polite">
+        <div class="row"><span class="label">Server</span><span id="st-server" class="pill">Connecting…</span></div>
+        <div class="row"><span class="label">Camera</span><span id="st-camera" class="pill">Off</span></div>
+        <div class="row"><span class="label">HighLo</span><span id="st-viewers" class="pill">Not connected</span></div>
+        <div class="row"><span class="label">Sending</span><span id="st-fps" class="pill">—</span></div>
+        <div class="row"><span class="label">Picture</span><span id="st-size" class="pill">—</span></div>
+        <div class="row"><span class="label">Snapshots</span><span id="st-snaps" class="pill">0 saved</span></div>
+      </section>
+
+      <p id="notice" class="notice" hidden></p>
+
+      <div class="preview">
+        <video id="preview" playsinline muted autoplay></video>
+        <canvas id="preview-canvas"></canvas>
+        <div id="preview-empty" class="preview-empty">Camera is off</div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-start" class="btn primary" type="button">Start camera</button>
+        <button id="btn-stop" class="btn" type="button" hidden>Stop</button>
+        <button id="btn-flip" class="btn" type="button" hidden>Flip camera</button>
+        <button id="btn-rotate" class="btn" type="button" hidden>Rotate 180°</button>
+        <button id="btn-snap" class="btn" type="button" hidden>Take snapshot</button>
+      </div>
+
+      <label class="field">
+        Quality
+        <select id="quality">
+          <option value="640:0.6:15">Low (saves battery)</option>
+          <option value="960:0.7:30" selected>Medium (30 fps)</option>
+          <option value="1280:0.75:30">High (30 fps)</option>
+          <option value="960:0.65:60">Max (60 fps)</option>
+        </select>
+      </label>
+
+      <label class="field">
+        Snapshot timer
+        <select id="snap-timer">
+          <option value="0">None</option>
+          <option value="3" selected>3 seconds</option>
+          <option value="5">5 seconds</option>
+          <option value="10">10 seconds</option>
+        </select>
+      </label>
+
+      <p class="hint">
+        Keep this page open and in the front. Place the phone on a stand above the table.
+        Video only goes to the computer running the HighLo camera server.
+        Snapshots are saved there too, in the server's <b>snapshots</b> folder.
+      </p>
+    </main>
+    <script src="/static/camera.js"></script>
+  </body>
+</html>

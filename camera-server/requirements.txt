@@ -1,0 +1,14 @@
+# Web server + WebSocket support
+starlette>=0.37
+uvicorn[standard]>=0.30      # pulls in the `websockets` library
+websockets>=12.0
+
+# Video + detection
+opencv-python-headless>=4.9
+numpy>=1.26
+ultralytics>=8.2             # YOLO. Optional: the server still streams without it
+
+# Security / setup helpers
+cryptography>=42.0           # generates the self-signed HTTPS certificate
+python-dotenv>=1.0
+qrcode>=7.4                  # prints the pairing QR code in the terminal

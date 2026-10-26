@@ -1,0 +1,8 @@
+.env
+certs/*
+!certs/.gitkeep
+models/*
+!models/.gitkeep
+__pycache__/
+.venv/
+snapshots/

@@ -1,0 +1,59 @@
+:root {
+  --felt: #0e3d2d;
+  --felt-dark: #082a1f;
+  --charcoal: #1b1c1d;
+  --charcoal-light: #2a2c2c;
+  --white: #f4f2ea;
+  --white-dim: #c7c9c1;
+  --white-faint: #8d918a;
+  --red-bright: #d1393f;
+  --green: #3f9d5c;
+  --yellow: #d1a13a;
+
+  --font-display: "Bebas Neue", "Arial Narrow", sans-serif;
+}
+* { box-sizing: border-box; }
+html { margin: 0; min-height: 100%; background: var(--felt); }
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  color: var(--white);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  padding: env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 16px);
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, #145038 0%, var(--felt) 60%, var(--felt-dark) 130%);
+}
+.shell { max-width: 460px; margin: 0 auto; padding-top: 16px; display: grid; gap: 14px; }
+.brand { font-size: 2rem; letter-spacing: 0.04em; font-weight: 800; font-family:"Bebas Neue", "Arial Narrow", sans-serif }
+.brand span { color: var(--red-bright); }
+.brand small { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em; color: var(--white-faint); text-transform: uppercase; margin-left: 6px; }
+.card { background: linear-gradient(180deg, var(--charcoal-light), var(--charcoal)); border: 1px solid rgba(168, 134, 63, 0.25); border-radius: 14px; padding: 6px 16px; }
+.row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.row:last-child { border-bottom: 0; }
+.label { color: var(--white-faint); font-size: 0.85rem; }
+.pill { font-size: 0.85rem; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; }
+.pill::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--white-faint); }
+.pill.ok::before { background: var(--green); }
+.pill.warn::before { background: var(--yellow); }
+.pill.bad::before { background: var(--red-bright); }
+.notice { margin: 0; padding: 10px 12px; border-radius: 8px; background: rgba(193, 75, 75, 0.15); border: 1px solid rgba(193, 75, 75, 0.5); font-size: 0.85rem; line-height: 1.4; }
+.preview { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.1); }
+.preview video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.preview-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--white-faint); font-size: 0.9rem; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.btn { flex: 1; min-height: 48px; padding: 0 18px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.2); background: transparent; color: var(--white); font: inherit; font-weight: 600; cursor: pointer; }
+.btn.primary { background: var(--red-bright); border-color: transparent; }
+#btn-stop { background: var(--red-bright); border-color: transparent; color: #fff; }
+.btn:disabled { opacity: 0.5; }
+.field { display: grid; gap: 6px; font-size: 0.85rem; color: var(--white-dim); }
+/* 16px so iOS Safari doesn't zoom the page when the control is tapped */
+.field select { font: inherit; font-size: 16px; padding: 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.15); background: var(--charcoal); color: var(--white); }
+.hint { margin: 0; font-size: 0.78rem; line-height: 1.5; color: var(--white-faint); }
+[hidden] { display: none !important; }
