@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { createPortal } from "react-dom";
-import { useAppState, useCameraLink } from "../state/AppStateContext.jsx";
+import { buildShareLink, useAppState, useCameraLink } from "../state/AppStateContext.jsx";
 import { parseServerAddress } from "../lib/cameraLink.js";
 
 // One plain-language line for where the phone link currently stands.
@@ -33,6 +33,59 @@ const inputStyle = {
   background: "var(--charcoal)",
   color: "var(--white)",
 };
+
+// The link everyone else at the table opens to see this camera. It carries
+// the server address and viewer token in the URL fragment (#...), which the
+// website's server never receives.
+function ShareTableLink({ settings }) {
+  const [copied, setCopied] = useState(false);
+  const url = buildShareLink(settings);
+  const local = /^(https?:\/\/)?(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(settings.serverAddress);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      window.prompt("Copy this link:", url);
+    }
+  }
+  async function share() {
+    try {
+      await navigator.share({ title: "HighLo table", url });
+    } catch {
+      // cancelled, or not supported: the copy button still works
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 6, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+      <div style={{ fontSize: "0.78rem", fontWeight: 600, marginBottom: 4 }}>Table link</div>
+      <p style={{ margin: "0 0 8px", fontSize: "0.72rem", color: "var(--white-faint)", lineHeight: 1.5 }}>
+        Send this to everyone at the table. Opening it connects their HighLo to this camera. Anyone with the link can
+        watch, so only share it with the table.
+      </p>
+      {local && (
+        <p style={{ margin: "0 0 8px", fontSize: "0.72rem", color: "var(--confidence-medium)", lineHeight: 1.5 }}>
+          This is a local network address: it only works for phones on the same Wi-Fi that have opened it once and
+          accepted the certificate warning. Use a tunnel address (see the camera server README) so it works for
+          everyone.
+        </p>
+      )}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="button" className="hlo-btn hlo-btn--ghost" style={{ flex: 1 }} onClick={copy}>
+          {copied ? "Copied" : "Copy link"}
+        </button>
+        {typeof navigator !== "undefined" && navigator.share && (
+          <button type="button" className="hlo-btn hlo-btn--ghost" style={{ flex: 1 }} onClick={share}>
+            Share…
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function CameraLinkModal({ onClose }) {
   const link = useCameraLink();
@@ -137,6 +190,7 @@ function CameraLinkModal({ onClose }) {
               Close
             </button>
           </div>
+          {link.settings.serverAddress && link.settings.token && <ShareTableLink settings={link.settings} />}
         </form>
       </div>
     </div>,

@@ -12,7 +12,7 @@ export const emptyPlayers = () =>
   Array.from({ length: SEAT_COUNT }, (_, i) => ({
     seat: i + 1,
     occupied: false,
-    hands: [{ cards: [], isBust: false, isSplit: false }],
+    hands: [{ cards: [], isBust: false, isSplit: false, isDoubled: false }],
     isTurn: false,
     confidence: "high",
     lastAction: null,

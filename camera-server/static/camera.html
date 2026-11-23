@@ -18,7 +18,6 @@
         <div class="row"><span class="label">HighLo</span><span id="st-viewers" class="pill">Not connected</span></div>
         <div class="row"><span class="label">Sending</span><span id="st-fps" class="pill">—</span></div>
         <div class="row"><span class="label">Picture</span><span id="st-size" class="pill">—</span></div>
-        <div class="row"><span class="label">Snapshots</span><span id="st-snaps" class="pill">0 saved</span></div>
       </section>
 
       <p id="notice" class="notice" hidden></p>
@@ -31,10 +30,7 @@
 
       <div class="actions">
         <button id="btn-start" class="btn primary" type="button">Start camera</button>
-        <button id="btn-stop" class="btn" type="button" hidden>Stop</button>
-        <button id="btn-flip" class="btn" type="button" hidden>Flip camera</button>
-        <button id="btn-rotate" class="btn" type="button" hidden>Rotate 180°</button>
-        <button id="btn-snap" class="btn" type="button" hidden>Take snapshot</button>
+        <button id="btn-stop" class="btn" type="button" hidden>Disconnect</button>
       </div>
 
       <label class="field">
@@ -47,20 +43,9 @@
         </select>
       </label>
 
-      <label class="field">
-        Snapshot timer
-        <select id="snap-timer">
-          <option value="0">None</option>
-          <option value="3" selected>3 seconds</option>
-          <option value="5">5 seconds</option>
-          <option value="10">10 seconds</option>
-        </select>
-      </label>
-
       <p class="hint">
         Keep this page open and in the front. Place the phone on a stand above the table.
         Video only goes to the computer running the HighLo camera server.
-        Snapshots are saved there too, in the server's <b>snapshots</b> folder.
       </p>
     </main>
     <script src="/static/camera.js"></script>

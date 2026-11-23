@@ -1,11 +1,16 @@
 """Step 3: make a labelled training set of fake table photos, ready for YOLO.
 
 It pastes your real card cutouts (assets/) onto your real empty-board photo - dealer cards,
-fanned player hands, face-down hole cards, the discard pile and the shoe - then makes each
-picture look like a phone photo (angle, lighting, blur, noise). The label of every card is
-the part of it you can actually see, which is exactly what the detector has to find.
+player hands dealt the way the table plays them (see build_scene), split hands, sideways
+double-down cards, face-down hole cards, the discard pile and the shoe at the board's edge -
+then makes each picture look like a phone photo (angle, lighting, blur, noise). The label of
+every card is the part of it you can actually see, which is exactly what the detector has to find.
 
-Run:  python generate.py --board "C:/Users/natal/Desktop/Fall 2026/image-references/empty-board.jpg" --count 3000
+Labels are oriented boxes by default (--format obb, for `yolo obb train`): a box turned to
+the card's own angle, so the model also learns which way each card lies. That is how the camera
+server spots a sideways double-down card. --format detect writes the older upright boxes.
+
+Run:  python generate.py --board "C:/Users/natal/Desktop/Fall 2026/emergin/reference/empty-board.jpg" --count 3000
 Out:  dataset/images/{train,val}/*.jpg   dataset/labels/{train,val}/*.txt   dataset/data.yaml
 """
 import argparse
@@ -115,12 +120,14 @@ def build_scene(rng, assets):
     def new_inst(class_id):
         i = next_inst[0]
         next_inst[0] += 1
-        inst_info[i] = [class_id, 0]
+        inst_info[i] = [class_id, 0, None]      # class, full pixel area, (cx, cy, theta) of the card
         return i
 
     def draw(face, cx, cy, width, theta, inst, shade):
         img = back if face == "back" else cards[face]
         inst_info[inst][1] += paste_card(scene, idmap, img, cx, cy, width, theta, inst, rng, shade)
+        if inst_info[inst][2] is None:
+            inst_info[inst][2] = (float(cx), float(cy), float(theta))
 
     # --- piles: stacks of face-down cards, labelled as one "back" each
     for key in ("discard_pile", "shoe"):
@@ -135,8 +142,9 @@ def build_scene(rng, assets):
             draw("back", cx + layer * rng.uniform(0.3, 0.9), cy - layer * rng.uniform(0.5, 1.4),
                  card_w * rng.uniform(0.97, 1.03), theta + rng.normal(0, 0.4), inst, 0.97 + 0.03 * rng.random())
 
-    # --- dealer: a row of cards above the arc, sometimes with a face-down hole card
-    n_dealer = int(rng.choice([0, 1, 2, 3, 4], p=[0.06, 0.12, 0.52, 0.2, 0.10]))
+    # --- dealer: a row of cards above the arc, sometimes with a face-down hole card. The piles sit at the
+    # board's edges, so there is room for a long row.
+    n_dealer = int(rng.choice([0, 1, 2, 3, 4, 5, 6], p=[0.05, 0.10, 0.42, 0.22, 0.12, 0.06, 0.03]))
     if n_dealer:
         d = layout["dealer"]
         gap = rng.uniform(1.03, 1.22)
@@ -152,30 +160,50 @@ def build_scene(rng, assets):
             draw(face, x, cy0 + rng.normal(0, 0.004 * H), w, base_theta + rng.normal(0, 1.5), inst,
                  rng.uniform(0.94, 1.04))
 
-    # --- players: 1-6 seats, each a fanned hand where later cards sit on top of earlier ones
+    # --- players. How the table deals (see the reference photos):
+    #   * a hand's first card has its top edge (the end towards the dealer) on the middle line of the
+    #     seat's white box, so it sits half a card further from the dealer than the box centre;
+    #   * every next card goes on top of the last one, a bit further TOWARDS the dealer (so of the cards
+    #     underneath, mostly the end away from the dealer, with its upside-down corner, stays visible);
+    #   * a split seat has two hands side by side, each on about half of the box, the pair first;
+    #   * a double-down card is laid sideways across the hand, on top, as its third card.
+    def deal_hand(anchor, theta_deg, n_cards, w, h, first=None, doubled=False):
+        th = math.radians(theta_deg)
+        up = np.array([math.sin(th), -math.cos(th)])          # towards the dealer
+        across = np.array([math.cos(th), math.sin(th)])
+        pos = anchor - up * 0.5 * h * rng.uniform(0.9, 1.1)
+        for i in range(n_cards):
+            code = first if (i == 0 and first) else pick_code(rng, codes)
+            theta = theta_deg + rng.normal(0, 2.5)
+            if doubled and i == n_cards - 1:
+                theta += 90 * rng.choice([-1, 1]) + rng.normal(0, 4)
+            inst = new_inst(CLASS_NAMES.index(code))
+            draw(code, pos[0], pos[1], w, theta, inst, rng.uniform(0.92, 1.05))
+            pos = pos + up * rng.uniform(0.25, 0.42) * h + across * rng.uniform(-0.3, 0.3) * w
+
     n_seats = int(rng.choice([0, 1, 2, 3, 4, 5, 6], p=[0.03, 0.10, 0.17, 0.22, 0.20, 0.16, 0.12]))
     seats = [layout["seats"][i] for i in rng.permutation(len(layout["seats"]))[:n_seats]]
     for seat in seats:
-        n_cards = int(rng.choice([1, 2, 3, 4, 5, 6], p=[0.04, 0.46, 0.26, 0.14, 0.07, 0.03]))
-        hand_theta = seat["angle"] + rng.normal(0, 5.0)
+        hand_theta = seat["angle"] + rng.normal(0, 4.0)
         w = card_w * rng.uniform(0.95, 1.05)
         h = w * 1.4
-        sideways = rng.random() < 0.2
-        cx = seat["x"] * W + rng.uniform(-0.012, 0.012) * W
-        cy = seat["y"] * H + rng.uniform(-0.012, 0.012) * W
+        box = np.array([seat["x"] * W, seat["y"] * H]) + rng.uniform(-0.01, 0.01, 2) * W
         th = math.radians(hand_theta)
-        c, s = math.cos(th), math.sin(th)
-        for i in range(n_cards):
-            code = pick_code(rng, codes)
-            theta = hand_theta + rng.normal(0, 2.5)
-            inst = new_inst(CLASS_NAMES.index(code))
-            draw(code, cx, cy, w, theta, inst, rng.uniform(0.92, 1.05))
-            if sideways:
-                dx, dy = rng.uniform(0.32, 0.46) * w, rng.uniform(-0.04, 0.04) * h
-            else:
-                dx, dy = rng.uniform(-0.08, 0.08) * w, rng.uniform(0.27, 0.40) * h
-            cx += c * dx - s * dy       # offset in the hand's own (rotated) frame
-            cy += s * dx + c * dy
+        across = np.array([math.cos(th), math.sin(th)])
+        if rng.random() < 0.15:                                # a split: one per seat at most
+            gap = rng.uniform(0.5, 0.62) * w                   # half of the box each
+            a = pick_code(rng, codes)
+            same = [c for c in codes if c[:-1] == a[:-1] and c != a]
+            pair = (a, same[int(rng.integers(len(same)))] if same else a)
+            for k, side in enumerate((-1, 1)):
+                doubled = rng.random() < 0.1
+                n = 3 if doubled else int(rng.choice([1, 2, 3, 4], p=[0.15, 0.5, 0.25, 0.1]))
+                deal_hand(box + across * side * gap, hand_theta + side * rng.uniform(0, 8), n, w, h,
+                          first=pair[k], doubled=doubled)
+        else:
+            doubled = rng.random() < 0.12
+            n = 3 if doubled else int(rng.choice([1, 2, 3, 4, 5, 6], p=[0.04, 0.46, 0.26, 0.14, 0.07, 0.03]))
+            deal_hand(box, hand_theta, n, w, h, doubled=doubled)
     return scene, idmap, inst_info
 
 
@@ -203,7 +231,7 @@ def camera_view(rng, scene, idmap, out_w, out_h, scene_to_frame=None):
         corners = np.array([[0, 0], [out_w, 0], [out_w, out_h], [0, out_h]], np.float32)
         wobble = corners + rng.normal(0, 0.006 * out_w, corners.shape).astype(np.float32)
         Hm = cv2.getPerspectiveTransform(corners, wobble) @ scene_to_frame
-        return _warp_scene(rng, scene, idmap, Hm, out_w, out_h)
+        return _warp_scene(rng, scene, idmap, Hm, out_w, out_h) + (Hm,)
     k = rng.uniform(0.76, 0.95)
     sw, sh = out_w * k, out_w * k * H / W
     cx = out_w / 2 + rng.normal(0, 0.025) * out_w
@@ -215,7 +243,7 @@ def camera_view(rng, scene, idmap, out_w, out_h, scene_to_frame=None):
     dst = np.stack([c * rel[:, 0] - s * rel[:, 1] + cx, s * rel[:, 0] + c * rel[:, 1] + cy], 1)
     dst += rng.normal(0, 0.007 * out_w, dst.shape).astype(np.float32)      # perspective wobble
     Hm = cv2.getPerspectiveTransform(src, dst.astype(np.float32))
-    return _warp_scene(rng, scene, idmap, Hm, out_w, out_h)
+    return _warp_scene(rng, scene, idmap, Hm, out_w, out_h) + (Hm,)
 
 
 def _warp_scene(rng, scene, idmap, Hm, out_w, out_h):
@@ -226,7 +254,7 @@ def _warp_scene(rng, scene, idmap, Hm, out_w, out_h):
     floor = floor_texture(rng, out_w, out_h)
     m = (cv2.GaussianBlur(cover, (0, 0), 1.2).astype(np.float32) / 255.0)[..., None]
     img = (img.astype(np.float32) * m + floor.astype(np.float32) * (1 - m)).astype(np.uint8)
-    return img, ids, float(abs(np.linalg.det(Hm[:2, :2])))
+    return img, ids, float(abs(np.linalg.det(Hm[:2, :2])))     # picture, ids, area scale
 
 
 def phone_look(rng, img):
@@ -264,9 +292,21 @@ def phone_look(rng, img):
 
 
 # ---------------------------------------------------------------- labels
-def labels_from_ids(ids, inst_info, scale2, out_w, out_h):
+def card_axes(geom, Hm):
+    """The card's long (upright) and short axes in the output picture, as unit vectors."""
+    cx, cy, theta = geom
+    th = math.radians(theta)
+    pts = np.float32([[[cx, cy]], [[cx + 20 * math.sin(th), cy - 20 * math.cos(th)]]])
+    a, b = cv2.perspectiveTransform(pts, Hm)[:, 0]
+    up = (b - a) / max(float(np.hypot(*(b - a))), 1e-6)
+    return up, np.array([-up[1], up[0]])
+
+
+def labels_from_ids(ids, inst_info, scale2, out_w, out_h, Hm=None, fmt="detect"):
+    """detect: (class, cx, cy, w, h). obb: (class, x1, y1, ... x4, y4), a box turned to the card's own angle
+    around the part of it that is visible. All normalised 0-1."""
     labels = []
-    for inst, (class_id, full_area) in inst_info.items():
+    for inst, (class_id, full_area, geom) in inst_info.items():
         ys, xs = np.nonzero(ids == inst)
         if xs.size == 0 or full_area == 0:
             continue
@@ -277,30 +317,54 @@ def labels_from_ids(ids, inst_info, scale2, out_w, out_h):
         # a pile is many stacked backs sharing one id, so the ratio test only applies to single cards
         if class_id != BACK_CLASS and visible < MIN_VISIBLE:
             continue
-        labels.append((class_id, (x0 + x1) / 2 / out_w, (y0 + y1) / 2 / out_h, (x1 - x0) / out_w, (y1 - y0) / out_h))
+        if fmt == "obb" and geom is not None and Hm is not None:
+            up, side = card_axes(geom, Hm)
+            px = np.stack([xs + 0.5, ys + 0.5], 1)
+            u, v = px @ up, px @ side
+            u0, u1, v0, v1 = u.min() - 0.5, u.max() + 0.5, v.min() - 0.5, v.max() + 0.5
+            corners = [side * v0 + up * u0, side * v1 + up * u0, side * v1 + up * u1, side * v0 + up * u1]
+            flat = []
+            for x, y in corners:
+                flat += [min(max(x / out_w, 0.0), 1.0), min(max(y / out_h, 0.0), 1.0)]
+            labels.append((class_id, *flat))
+        else:
+            labels.append((class_id, (x0 + x1) / 2 / out_w, (y0 + y1) / 2 / out_h, (x1 - x0) / out_w,
+                           (y1 - y0) / out_h))
     return labels
 
 
+def _box_corners(label, fmt, out_w, out_h):
+    if fmt == "obb":
+        return np.array(label[1:], np.float32).reshape(4, 2) * [out_w, out_h]
+    _, x, y, w, h = label
+    return np.array([[x - w / 2, y - h / 2], [x + w / 2, y - h / 2], [x + w / 2, y + h / 2],
+                     [x - w / 2, y + h / 2]], np.float32) * [out_w, out_h]
+
+
 def make_one(job):
-    index, seed, out_w, out_h, split, out_dir, preview = job
+    index, seed, out_w, out_h, split, out_dir, preview = job[:7]
+    fmt = job[7] if len(job) > 7 else "detect"
     rng = np.random.default_rng(seed)
     scene, idmap, info = build_scene(rng, _assets)
-    img, ids, scale2 = camera_view(rng, scene, idmap, out_w, out_h, _assets.get("scene_to_frame"))
-    labels = labels_from_ids(ids, info, scale2, out_w, out_h)
+    img, ids, scale2, Hm = camera_view(rng, scene, idmap, out_w, out_h, _assets.get("scene_to_frame"))
+    labels = labels_from_ids(ids, info, scale2, out_w, out_h, Hm, fmt)
     img = phone_look(rng, img)
     name = f"synth_{index:06d}"
     out_dir = Path(out_dir)
     cv2.imwrite(str(out_dir / "images" / split / f"{name}.jpg"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR),
                 [cv2.IMWRITE_JPEG_QUALITY, 92])
     (out_dir / "labels" / split / f"{name}.txt").write_text(
-        "".join(f"{c} {x:.6f} {y:.6f} {w:.6f} {h:.6f}\n" for c, x, y, w, h in labels))
+        "".join(f"{lab[0]} " + " ".join(f"{v:.6f}" for v in lab[1:]) + "\n" for lab in labels))
     if preview:
         vis = cv2.cvtColor(img, cv2.COLOR_RGB2BGR).copy()
-        for c, x, y, w, h in labels:
-            p0 = (int((x - w / 2) * out_w), int((y - h / 2) * out_h))
-            p1 = (int((x + w / 2) * out_w), int((y + h / 2) * out_h))
-            cv2.rectangle(vis, p0, p1, (0, 255, 255) if c != BACK_CLASS else (255, 160, 0), 2)
-            cv2.putText(vis, CLASS_NAMES[c], (p0[0], max(14, p0[1] - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+        for lab in labels:
+            c = lab[0]
+            quad = _box_corners(lab, fmt, out_w, out_h)
+            cv2.polylines(vis, [quad.astype(np.int32)], True, (0, 255, 255) if c != BACK_CLASS else (255, 160, 0), 2)
+            if fmt == "obb":                          # the edge nearest the dealer end of the card, in red
+                cv2.line(vis, tuple(quad[2].astype(int)), tuple(quad[3].astype(int)), (0, 0, 255), 2)
+            x0, y0 = quad.min(0)
+            cv2.putText(vis, CLASS_NAMES[c], (int(x0), max(14, int(y0) - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                         (0, 255, 0), 2)
         (out_dir / "preview").mkdir(exist_ok=True)
         cv2.imwrite(str(out_dir / "preview" / f"{name}.jpg"), vis)
@@ -320,6 +384,9 @@ def main() -> int:
     ap.add_argument("--calibration", default="",
                     help="calibration.json from the camera server's calibrate.py: renders the board exactly as the "
                          "real camera frames it (size is then taken from it unless --size is given)")
+    ap.add_argument("--format", choices=("obb", "detect"), default="obb",
+                    help="obb (default): boxes turned to each card's angle, train with `yolo obb train`; needed to "
+                         "spot sideways double-down cards. detect: upright boxes, `yolo detect train`.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--preview", type=int, default=24, help="also save this many pictures with boxes drawn on")
     ap.add_argument("--workers", type=int, default=1, help="CPU processes (try 4 on a laptop)")
@@ -343,7 +410,7 @@ def main() -> int:
     jobs = []
     for i in range(args.count):
         split = "val" if i < n_val else "train"
-        jobs.append((i, args.seed * 1_000_003 + i, out_w, out_h, split, str(out), i < args.preview))
+        jobs.append((i, args.seed * 1_000_003 + i, out_w, out_h, split, str(out), i < args.preview, args.format))
 
     counts = np.zeros(len(CLASS_NAMES), int)
     if args.workers > 1:
@@ -371,8 +438,12 @@ def main() -> int:
     print(f"labelled objects: {counts.sum()}  | per card: min {present.min()}, max {present.max()}  "
           f"| 'back': {counts[BACK_CLASS]}")
     imgsz = 1088 if args.calibration else 1280
-    print(f"next:  yolo detect train data={out / 'data.yaml'} model=yolov8s.pt imgsz={imgsz} epochs=100 "
-          f"batch=8 fliplr=0 flipud=0 degrees=8")
+    if args.format == "obb":
+        print(f"next:  yolo obb train data={out / 'data.yaml'} model=yolov8s-obb.pt imgsz={imgsz} epochs=100 "
+              f"batch=8 fliplr=0 flipud=0 degrees=8")
+    else:
+        print(f"next:  yolo detect train data={out / 'data.yaml'} model=yolov8s.pt imgsz={imgsz} epochs=100 "
+              f"batch=8 fliplr=0 flipud=0 degrees=8")
     return 0
 
 

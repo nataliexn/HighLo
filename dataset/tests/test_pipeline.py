@@ -103,6 +103,64 @@ class PipelineTests(unittest.TestCase):
         allowed = set(range(20)) | {gen.BACK_CLASS}
         self.assertTrue(used <= allowed, used - allowed)
 
+    def _layout(self):
+        seats = lfb.detect_seats(cv2.cvtColor(fake_board(), cv2.COLOR_BGR2RGB))[0]
+        self.layout_path.write_text(json.dumps({
+            "card_width": 0.075, "seats": seats,
+            "dealer": {"x": 0.5, "y": 0.235, "x_jitter": 0.03, "y_jitter": 0.02},
+            "discard_pile": {"x": 0.119, "y": 0.15, "jitter": 0.012, "present": 1.0},
+            "shoe": {"x": 0.870, "y": 0.11, "jitter": 0.012, "present": 1.0}}))
+        return seats
+
+    def test_oriented_labels_follow_each_card(self):
+        self._layout()
+        gen.init_worker(self.root / "assets", self.board_path, self.layout_path)
+        out = self.root / "ds_obb"
+        for sub in ("images/train", "labels/train"):
+            (out / sub).mkdir(parents=True)
+        lines = []
+        for i in range(10):
+            gen.make_one((i, 500 + i, 640, 360, "train", str(out), False, "obb"))
+            lines += filter(None, (out / "labels" / "train" / f"synth_{i:06d}.txt").read_text().split("\n"))
+        self.assertTrue(lines)
+        for line in lines:
+            parts = line.split()
+            self.assertEqual(len(parts), 9, line)                  # class + four corners
+            self.assertTrue(0 <= int(parts[0]) < len(gen.CLASS_NAMES))
+            quad = np.array([float(v) for v in parts[1:]]).reshape(4, 2) * [640, 360]
+            self.assertTrue(((quad >= 0) & (quad <= 640)).all())
+            sides = np.linalg.norm(np.roll(quad, -1, 0) - quad, axis=1)
+            self.assertGreater(sides.min(), 0)
+            d1, d2 = quad[1] - quad[0], quad[2] - quad[1]
+            if sides.min() > 3 and sides[0] < 600 and sides[1] < 350:   # unclipped boxes are rectangles
+                self.assertLess(abs(d1 @ d2) / (np.linalg.norm(d1) * np.linalg.norm(d2)), 0.1, line)
+
+    def test_hands_are_dealt_towards_the_dealer_with_splits_and_doubles(self):
+        self._layout()
+        gen.init_worker(self.root / "assets", self.board_path, self.layout_path)
+        placed = []
+        real_new = gen.paste_card
+
+        def spy(scene, idmap, rgba, cx, cy, width, theta, inst, rng, shade=1.0, shadow=0.35):
+            placed.append((inst, cx, cy, theta))
+            return real_new(scene, idmap, rgba, cx, cy, width, theta, inst, rng, shade, shadow)
+
+        gen.paste_card = spy
+        try:
+            sideways = 0
+            for seed in range(60):
+                placed.clear()
+                gen.build_scene(np.random.default_rng(seed), gen._assets)
+                seats = gen._assets["layout"]["seats"]
+                for inst, cx, cy, theta in placed:
+                    seat = min(seats, key=lambda s: math.dist((s["x"] * 2000, s["y"] * 1200), (cx, cy)))
+                    if math.dist((seat["x"] * 2000, seat["y"] * 1200), (cx, cy)) < 160:
+                        off = ((theta - seat["angle"]) + 90) % 180 - 90
+                        sideways += abs(off) > 60
+        finally:
+            gen.paste_card = real_new
+        self.assertGreater(sideways, 0)                        # some double-down cards were laid sideways
+
     def test_same_seed_gives_same_picture(self):
         gen.init_worker(self.root / "assets", self.board_path, self.layout_path)
         out = self.root / "ds2"

@@ -52,15 +52,23 @@ Look at a few files in `dataset/preview/` (boxes drawn on). If those look right,
 
 ## What the pictures contain
 
-- dealer cards in a row, sometimes with a face-down hole card
-- 0-6 seats, each a fanned hand of 1-6 cards where later cards sit on top and the corner of the earlier ones shows
-- the discard pile and shoe (stacks of backs)
+Cards are laid out the way the table is played (the photos in `emergin/reference`):
+
+- dealer cards in a row of up to six, sometimes with a face-down hole card
+- 0-6 seats. A hand's **first card has its top edge on the middle line of the seat's white box**; each next card goes
+  **on top, a little further towards the dealer**, so what shows of the cards underneath is mostly their far end
+  (with the upside-down corner index)
+- **splits**: two hands side by side, each on about half of the box, the pair first (at most one split per seat)
+- **double downs**: a third card laid **sideways** across the hand, on top
+- the discard pile and the shoe at the **top corners, on the board's edge**, often partly out of the picture
 - a phone-like camera: board 75-95% of the frame, small tilt and perspective skew, floor around it
+  (or the real framing with `--calibration`)
 - phone-like photos: bright / dim, warm / cool, uneven light, glare, slight blur, noise, JPEG
 
-**Labels are the part of each card you can actually see**, not the whole card. A card that is almost
-completely covered gets no label. Classes: the 52 cards (`AS 2S ... KC`) plus `back` (any face-down card:
-a hole card, the discard pile, the shoe). Zone logic later decides which backs matter.
+**Labels are oriented boxes** (`--format obb`, the default): each box is turned to its card's own angle and wraps the
+part of the card you can see. That is how the model learns which way a card lies, and how the camera server tells a
+sideways double-down card from a normal one. `--format detect` still writes the older upright boxes, but a model
+trained on those can't spot doubles.
 
 ## 4. Train
 
@@ -68,14 +76,17 @@ On a machine with an NVIDIA GPU (or free Google Colab):
 
 ```powershell
 pip install ultralytics
-yolo detect train data=dataset/data.yaml model=yolov8s.pt imgsz=1088 epochs=100 batch=8 fliplr=0 flipud=0 degrees=8
+yolo obb train data=dataset/data.yaml model=yolov8s-obb.pt imgsz=1088 epochs=100 batch=8 fliplr=0 flipud=0 degrees=8
 ```
+
+(`yolo obb` because the labels are oriented boxes. For `--format detect` data use
+`yolo detect train ... model=yolov8s.pt` instead.)
 
 - **`fliplr=0 flipud=0` matters.** The default mirrors pictures, which turns every suit and number backwards.
 - `imgsz=1280` matters: a card is only about 7% of the picture width, so its corner symbol is tiny.
 - Slow GPU or out of memory? Use `batch=4`, or `model=yolov8n.pt`.
 
-Result: `runs/detect/train/weights/best.pt`. Install it:
+Result: `runs/obb/train/weights/best.pt` (`runs/detect/...` for a detect model). Install it:
 
 1. Copy it to `highlo-camera-server/models/cards.pt`
 2. In the camera server's `.env` set `IMGSZ=1088` (and `DEVICE=0` for an NVIDIA GPU)
@@ -88,7 +99,8 @@ look great (99%). It does **not** prove the model works on a real table. To find
 
 1. Take 10-20 real photos from the phone stand (or save frames from the camera server) with cards dealt.
 2. Label them (Roboflow or Label Studio) with the same 53 class names.
-3. Put them in `dataset/images/val` + `dataset/labels/val`, replacing the fake ones, and run `yolo detect val`.
+3. Put them in `dataset/images/val` + `dataset/labels/val`, replacing the fake ones, and run `yolo obb val`.
+   Label them as rotated boxes (Roboflow and Label Studio both do "oriented bounding box"), turned with the card.
 
 If real accuracy is poor, add those labelled real photos to `train` as well. A few dozen real photos on top
 of the synthetic set helps far more than another 10,000 fake ones.
@@ -115,6 +127,17 @@ They use made-up cards and a made-up board, so they run without your photos.
 HighLo is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**; see the `LICENSE` file at the root of the repository. The card detector uses Ultralytics YOLO, which is itself AGPL-3.0, so the project as a whole follows the same licence. If you modify it and let other people use it over a network, you must offer them the source code. Not legal advice: read the licence before redistributing or selling anything built on this.
 
 The card and board photos you use to build the dataset are yours; do not publish them unless you are happy for others to use them.
+
+## Make the training set (the usual command)
+
+Run from this folder (`highlo\dataset`). The board photo is `emergin\reference\empty-board.jpg` (taken Nov 2026, with
+nothing on it; `layout.json` and the camera calibration were rebuilt from it). The card cutouts are still in the old
+copy, `emergin\highlo-dataset\highlo-dataset\assets`.
+
+```powershell
+.venv\Scripts\activate
+python generate.py --board "..\..\..\reference\empty-board.jpg" --assets "..\..\..\highlo-dataset\highlo-dataset\assets" --calibration ..\camera-server\calibration\calibration.json --count 3000 --workers 4
+```
 
 ## Match the real camera framing
 

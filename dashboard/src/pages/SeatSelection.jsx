@@ -89,7 +89,7 @@ export default function SeatSelection() {
 
   let hint = "Only seats the camera sees occupied can be selected.";
   if (!live) hint = "No camera is connected, so no seat can be taken yet. You can spectate in the meantime.";
-  else if (!seatsKnown) hint = "Seats are read from the next round's deal. You can spectate until then.";
+  else if (!seatsKnown) hint = "A seat opens up as soon as the dealer gives it a card. You can spectate until then.";
 
   return (
     <div

@@ -68,8 +68,8 @@ def main() -> int:
         "card_width": 0.075,                 # card width as a fraction of the board photo's width
         "seats": seats,
         "dealer": {"x": 0.50, "y": 0.235, "x_jitter": 0.03, "y_jitter": 0.02},
-        "discard_pile": {"x": 0.175, "y": 0.16, "jitter": 0.015, "present": 0.65},
-        "shoe": {"x": 0.82, "y": 0.15, "jitter": 0.015, "present": 0.9},
+        "discard_pile": {"x": 0.119, "y": 0.15, "jitter": 0.012, "present": 0.65},   # at the board edge
+        "shoe": {"x": 0.870, "y": 0.11, "jitter": 0.012, "present": 0.9},
     }
     Path(args.out).write_text(json.dumps(layout, indent=2))
     print(f"wrote {args.out}")

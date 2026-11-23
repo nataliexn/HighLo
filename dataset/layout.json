@@ -1,55 +1,55 @@
 {
   "_note": "x, y are fractions of the board photo's width/height. angle = degrees clockwise from 'card upright'. Edit freely.",
-  "board_aspect": 1.6653,
+  "board_aspect": 1.7109,
   "card_width": 0.075,
   "seats": [
     {
-      "x": 0.1387,
-      "y": 0.4876,
-      "angle": 33.8
+      "x": 0.1557,
+      "y": 0.4286,
+      "angle": 40.4
     },
     {
-      "x": 0.2759,
-      "y": 0.6296,
-      "angle": 21.5
+      "x": 0.2812,
+      "y": 0.5791,
+      "angle": 24.7
     },
     {
-      "x": 0.4317,
-      "y": 0.7062,
-      "angle": 5.6
+      "x": 0.4295,
+      "y": 0.6654,
+      "angle": 6.5
     },
     {
-      "x": 0.5909,
-      "y": 0.6994,
-      "angle": -10.6
+      "x": 0.5826,
+      "y": 0.6699,
+      "angle": -10.8
     },
     {
-      "x": 0.7425,
-      "y": 0.6107,
-      "angle": -27.2
+      "x": 0.7301,
+      "y": 0.5901,
+      "angle": -27.0
     },
     {
-      "x": 0.8763,
-      "y": 0.4567,
-      "angle": -43.9
+      "x": 0.8593,
+      "y": 0.4466,
+      "angle": -38.2
     }
   ],
   "dealer": {
-    "x": 0.5,
-    "y": 0.235,
+    "x": 0.5059,
+    "y": 0.2094,
     "x_jitter": 0.03,
     "y_jitter": 0.02
   },
   "discard_pile": {
-    "x": 0.175,
-    "y": 0.16,
-    "jitter": 0.015,
+    "x": 0.154,
+    "y": 0.1,
+    "jitter": 0.012,
     "present": 0.65
   },
   "shoe": {
-    "x": 0.82,
-    "y": 0.15,
-    "jitter": 0.015,
+    "x": 0.878,
+    "y": 0.114,
+    "jitter": 0.012,
     "present": 0.9
   }
 }

@@ -72,15 +72,31 @@ Other class names are still drawn, just without a HighLo card code. Tune `CONF` 
 
 Keep `.env` and `certs/` private (they are in `.gitignore`). If you think the viewer token has leaked, delete the `VIEWER_TOKEN` line from `.env` and restart to get a new one.
 
-## Using the deployed (Vercel) HighLo
+## Using the deployed (Vercel) HighLo with everyone at the table
 
-A website on the internet connecting to a computer on your home network works, but expect friction:
+The phone that films the table stays on your Wi-Fi as before (the QR code). The people **watching** on their phones
+may be on any network, so give the server a public HTTPS address with a tunnel and share one link.
 
-- Your browser must trust the certificate (the "open the address once and accept" step above).
-- Newer versions of Chrome and other browsers ask for permission before a public website talks to devices on your local network. Allow it for your HighLo address.
-- Add your HighLo URL to `ALLOWED_ORIGINS`.
+1. Install Cloudflare's `cloudflared` once (`winget install --id Cloudflare.cloudflared` on Windows).
+2. With `python main.py` running, in a second terminal:
 
-Running HighLo locally (`npm run dev`) avoids most of this. To reach the server from outside your home network, use a tunnel that provides a trusted HTTPS address (for example Cloudflare Tunnel or ngrok), set `TLS=0` in `.env` so the server speaks plain HTTP to the tunnel, and use the tunnel's `https://` address in both the phone link and HighLo's Camera settings.
+   ```bash
+   cloudflared tunnel --url https://localhost:8443 --no-tls-verify
+   ```
+
+   It prints an address like `https://something-random.trycloudflare.com`. Its certificate is trusted, so nobody
+   has to accept a warning. The address changes every time you start the tunnel.
+3. Make sure your HighLo URL is in `ALLOWED_ORIGINS` (for example `https://highlo-black.vercel.app`).
+4. In HighLo, log in as **camera**, open **Camera**, enter the tunnel address and the viewer token, and save.
+5. In the same dialog, **Copy link** (or **Share…**) under *Table link* and send it to the table. Opening it connects
+   their HighLo to the camera; nobody else needs to type anything. The token travels in the part of the link after
+   `#`, which Vercel never receives, but anyone holding the link can watch, so share it only with the table.
+
+Without a tunnel the link only works on the same Wi-Fi, and only after each phone has opened the server address
+once and accepted the certificate warning.
+
+All tunnel traffic reaches the server from one address, so eight wrong tokens in a minute lock out every viewer for
+a minute. The mobile screens don't load the video, so many phones watching costs little upload.
 
 ## Settings (`.env`)
 
@@ -105,7 +121,8 @@ See `.env.example`: `PORT`, `ALLOWED_ORIGINS`, `MODEL_PATH`, `CONF`, `IMGSZ`, `D
 python -m unittest discover -s tests -v
 ```
 
-`tests/test_engine.py` covers the table engine (cards counted once, hole card, rounds, mid-shoe join, shuffle).
+`tests/test_engine.py` covers the table engine (cards counted once, hole card, rounds, mid-shoe join, shuffle, seats,
+splits, doubles, short dropouts). `tests/test_detector.py` covers reading card angles from an oriented-box model.
 
 The server tests cover sign-in, rejection of wrong tokens and unknown sites, lock-out, the phone-to-HighLo path (status, detections, video stream) with a fake detector, and certificate creation.
 
@@ -139,9 +156,25 @@ With a model **and** a calibration the server turns card boxes into table state 
 
 ### Seats and joining mid-round
 
-- **Seats** are read from each round's opening deal (the dealer has two cards and every seat that has a card has two)
-  and remembered, even while the table is swept, until the next opening deal. A seat dealt last round but not this
-  one is vacant. HighLo uses this to take someone out of a seat that is no longer in play.
+- **Seats** count as occupied as soon as they get their first card, so players can pick their seat straight away.
+  When the opening deal is complete (the dealer has two cards and every seat that has a card has two) the seats
+  are fixed and remembered, even while the table is swept, until the next opening deal. A seat dealt last round but
+  not this one is vacant. A seat that gets a card after that (one the deal check missed) is added. HighLo uses this
+  to take someone out of a seat that is no longer in play.
+- **Splits** are only looked for once the opening deal is complete (everyone has two cards), and only once per seat.
+  When a seat's first two cards are a pair (any two ten-value cards count) and they sit side by side across the seat,
+  more than `SPLIT_SEPARATION` card widths (0.7) apart, each on about half of the box, the seat has two hands. Cards
+  stacked towards the dealer (a normal hit) don't count, only the sideways distance does. Each later card joins the
+  hand it lies nearest. Hand 1 is the one on the dealer's left (the right of the picture) and is played first.
+- **Double downs.** A card lying sideways (more than `SIDEWAYS_DEGREES`, 45, from its seat's upright) marks the hand
+  doubled and finished, and the turn moves on. This needs an oriented-box model (`yolo obb`, see the dataset README),
+  which reports each card's angle. With an ordinary detect model doubles aren't recognised. A card's angle is read
+  when it is confirmed, while it is still on top and fully visible.
+- **Card placement.** A hand's first card has its top edge on the middle of the seat box, and every next card goes on
+  top, towards the dealer. The discard pile and the shoe sit at the board's top corners.
+- **Short dropouts.** If frames stop for up to `GAP_SECONDS` (15 s), for example on a weak network, the engine
+  assumes the table didn't change: the cards stay and nothing is counted twice. After a longer gap it starts over.
+  HighLo also keeps the last table on screen for 15 s after it loses the camera.
 - **Joining mid-round.** If cards are already on the table a few seconds after the server starts, they are not shown
   or counted. Once every one of them has been swept away, the next card starts a new round and tracking begins.
 - One physical card that the model labels twice (for example QH and QD) is counted once.
@@ -158,7 +191,7 @@ The tuning numbers (seconds to confirm a card, to end a round, to call a shuffle
 
 ## What this does not do yet
 
-- Gesture recognition (hit / stand), splits, and who is really "in turn".
+- Gesture recognition (hit / stand), and who is really "in turn".
 - It has not been trained or tested with a real card model, and the live HTTPS path was checked with an automated test
   client rather than a real phone. The table engine is tested with simulated detections, not a real game yet.
 - A moved stand needs a new snapshot and `calibrate.py` re-run.

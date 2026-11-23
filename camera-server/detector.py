@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Protocol
 
@@ -34,6 +35,17 @@ def to_highlo_code(label: str) -> str | None:
     if len(compact) in (2, 3) and compact[-1] in "SHDC" and compact[:-1] in RANKS:
         return compact
     return None
+
+
+def long_side_angle(w: float, h: float, rotation: float) -> float:
+    """Direction of a rotated box's long side, in degrees clockwise from vertical (-90..90).
+
+    `rotation` is Ultralytics' OBB angle in radians: the direction of the box's `w`
+    side, measured from the x axis towards y (clockwise on screen). A card's long side
+    is its upright, so a card lying sideways reads about 90 degrees off its seat."""
+    vx, vy = (math.cos(rotation), math.sin(rotation)) if w >= h else (-math.sin(rotation), math.cos(rotation))
+    angle = math.degrees(math.atan2(vx, -vy))
+    return (angle + 90.0) % 180.0 - 90.0
 
 
 class Detector(Protocol):
@@ -72,21 +84,32 @@ class YoloDetector:
         height, width = result.orig_shape
         names = result.names
         found = []
-        for box in result.boxes:
-            label = str(names[int(box.cls[0])])
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
-            found.append(
-                {
-                    "label": label,
-                    "code": to_highlo_code(label),
-                    "conf": round(float(box.conf[0]), 3),
-                    # normalised 0-1 so the viewer can draw it at any size
-                    "box": [
-                        round(x1 / width, 4), round(y1 / height, 4),
-                        round(x2 / width, 4), round(y2 / height, 4),
-                    ],
-                }
-            )
+
+        def entry(cls, conf, x1, y1, x2, y2, angle=None):
+            label = str(names[int(cls)])
+            item = {
+                "label": label,
+                "code": to_highlo_code(label),
+                "conf": round(float(conf), 3),
+                # normalised 0-1 so the viewer can draw it at any size
+                "box": [round(x1 / width, 4), round(y1 / height, 4), round(x2 / width, 4), round(y2 / height, 4)],
+            }
+            if angle is not None:
+                item["angle"] = round(angle, 1)
+            return item
+
+        obb = getattr(result, "obb", None)
+        if obb is not None:
+            # An oriented-box model (yolo obb): also tells which way each card lies,
+            # which is how a sideways double-down card is recognised.
+            for (x1, y1, x2, y2), (_, _, w, h, r), cls, conf in zip(
+                obb.xyxy.tolist(), obb.xywhr.tolist(), obb.cls.tolist(), obb.conf.tolist()
+            ):
+                found.append(entry(cls, conf, x1, y1, x2, y2, long_side_angle(w, h, r)))
+        elif result.boxes is not None:
+            for box in result.boxes:
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                found.append(entry(box.cls[0], box.conf[0], x1, y1, x2, y2))
         return found
 
 

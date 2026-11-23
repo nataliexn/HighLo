@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 import config from "../config.js";
 import { computeCountStats, hiLoValue, TOTAL_DECKS } from "../lib/count.js";
 import { connectCameraLink } from "../lib/cameraLink.js";
+import { dealerFinished, roundResults as buildRoundResults } from "../lib/outcome.js";
 import {
   emptyOccupancy,
   emptyPlayers,
@@ -19,6 +20,9 @@ const AppStateContext = createContext(null);
 const CameraLinkContext = createContext(null);
 
 const LINK_STORAGE_KEY = "highlo:cameraLink";
+// When the camera or the connection drops, the table stays on screen this
+// long before it is cleared, so a short network hiccup mid-hand loses nothing.
+export const EXPIRE_MS = 15000;
 const OFFLINE_LINK = {
   serverOnline: false, // HighLo can reach the camera server
   phoneOnline: false, // a phone is paired with the server
@@ -33,7 +37,33 @@ const OFFLINE_LINK = {
   problem: null, // "token" | "origin" | "address" | null
 };
 
+// A table link shared by the camera host: https://<site>/#cam=<address>&key=<token>.
+// It lives in the URL fragment, which is never sent to the website's server.
+// Opening it saves the connection in this browser and tidies the address bar.
+function linkFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const serverAddress = (params.get("cam") || "").trim();
+    const token = (params.get("key") || "").trim();
+    if (!serverAddress || !token) return null;
+    const clean = { serverAddress, token };
+    window.localStorage.setItem(LINK_STORAGE_KEY, JSON.stringify(clean));
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    return clean;
+  } catch {
+    return null;
+  }
+}
+
+/** The link the camera host can send to everyone at the table. */
+export function buildShareLink(settings) {
+  const params = new URLSearchParams({ cam: settings.serverAddress, key: settings.token });
+  return `${window.location.origin}/#${params.toString()}`;
+}
+
 function loadLinkSettings() {
+  const shared = linkFromUrl();
+  if (shared) return shared;
   try {
     const saved = JSON.parse(window.localStorage.getItem(LINK_STORAGE_KEY));
     if (saved && typeof saved.serverAddress === "string" && typeof saved.token === "string") {
@@ -134,7 +164,19 @@ export function AppStateProvider({ children }) {
   // Phone camera link (see lib/cameraLink.js). Settings live in this browser.
   const [linkSettings, setLinkSettings] = useState(loadLinkSettings);
   const [cameraLink, setCameraLink] = useState(OFFLINE_LINK);
-  const live = cameraLink.serverOnline && cameraLink.phoneOnline && cameraLink.cameraOpen;
+  const rawLive = cameraLink.serverOnline && cameraLink.phoneOnline && cameraLink.cameraOpen;
+  // `live` stays true for EXPIRE_MS after the camera drops; `holding` marks that window.
+  const [graceLive, setGraceLive] = useState(false);
+  useEffect(() => {
+    if (rawLive) {
+      setGraceLive(true);
+      return undefined;
+    }
+    const timer = setTimeout(() => setGraceLive(false), EXPIRE_MS);
+    return () => clearTimeout(timer);
+  }, [rawLive]);
+  const live = rawLive || graceLive;
+  const holding = live && !rawLive;
   const cameraConnected = live || Boolean(config.CAMERA_STREAM_URL);
   const [isCountHistoryVisible, setIsCountHistoryVisible] = useState(true);
 
@@ -147,10 +189,6 @@ export function AppStateProvider({ children }) {
   function setRecommendationScope(next) {
     if (canToggleRecommendationView) setScopeChoice(next);
   }
-
-  // Seat -> "win" | "lose" | "push", shown as a tinted overlay for a few
-  // seconds after the dealer's hand resolves (not wired to the camera yet).
-  const [roundOutcomes] = useState({});
 
   // Per-user card corrections. Keyed by "seat-handIndex-cardIndex" (seat
   // can be a numeric seat or the string "dealer") so a correction only
@@ -191,6 +229,34 @@ export function AppStateProvider({ children }) {
   // component and page always agree, and update the instant a card is
   // added — no separate "runningCount" field to keep in sync by hand.
   const countStats = useMemo(() => computeCountStats(countHistory, TOTAL_DECKS), [countHistory]);
+
+  // ---- Round results ------------------------------------------------------
+  // Once the dealer stands (17+) or busts, every hand gets a result; a split
+  // hand gets its own. Uses this viewer's card corrections. The results stay
+  // up after the table is swept and clear when the next round starts.
+  const [roundResults, setRoundResults] = useState(null);
+  const liveResults = useMemo(() => {
+    const fix = (seat, handIndex, cards) =>
+      cards.map((c, i) => localCorrections[`${seat}-${handIndex}-${i}`] || c);
+    const fixedDealer = { ...dealer, cards: fix("dealer", 0, dealer.cards) };
+    if (!dealerFinished(fixedDealer)) return null;
+    const fixedPlayers = players.map((p) => ({
+      ...p,
+      hands: p.hands.map((h, hi) => ({ ...h, cards: fix(p.seat, hi, h.cards) })),
+    }));
+    return buildRoundResults(fixedPlayers, fixedDealer);
+  }, [players, dealer, localCorrections]);
+  useEffect(() => {
+    if (liveResults && liveResults.length) setRoundResults(liveResults);
+    else if (dealer.cards.length > 0) setRoundResults(null); // dealer still drawing (or a misread was fixed)
+  }, [liveResults, dealer.cards.length]);
+  const roundOutcomes = useMemo(() => {
+    const map = {};
+    (roundResults || []).forEach((r) => {
+      map[`${r.seat}-${r.handIndex}`] = r.result;
+    });
+    return map;
+  }, [roundResults]);
 
   // ---- Force Shuffle (manual, THIS USER ONLY) ---------------------------
   // Only changes this user's own (locally stored) history and count — it
@@ -291,6 +357,7 @@ export function AppStateProvider({ children }) {
       setShoeStats(emptyShoeStats());
       setMidShoeJoin(defaultMidShoeJoin);
       setLocalCorrections({});
+      setRoundResults(null);
       roundRef.current = { active: false, played: false };
       return;
     }
@@ -302,10 +369,11 @@ export function AppStateProvider({ children }) {
       if (event.roundActive && !round.active) {
         round.played = false;
         setLocalCorrections({}); // corrections belong to the round they were made in
+        setRoundResults(null);
       }
       if (event.roundActive && me.selectedSeat && event.players) {
         const mine = event.players.find((p) => p.seat === me.selectedSeat);
-        if (mine && mine.hands[0].cards.length > 0) round.played = true;
+        if (mine && mine.hands.some((h) => h.cards.length > 0)) round.played = true;
       }
       // A round the user sat through has ended: it counts towards their analysis
       // (only when logged in AND sitting, never for a spectator or a guest).
@@ -346,8 +414,8 @@ export function AppStateProvider({ children }) {
   }
 
   const linkValue = useMemo(
-    () => ({ ...cameraLink, live, settings: linkSettings, saveLinkSettings, clearLinkSettings }),
-    [cameraLink, live, linkSettings]
+    () => ({ ...cameraLink, live: rawLive, holding, settings: linkSettings, saveLinkSettings, clearLinkSettings }),
+    [cameraLink, rawLive, holding, linkSettings]
   );
 
   const value = useMemo(
@@ -384,6 +452,7 @@ export function AppStateProvider({ children }) {
       canUpdateAnalysis,
       canToggleRecommendationView,
       live,
+      holding,
       seatsKnown,
       occupancy,
       players,
@@ -400,6 +469,7 @@ export function AppStateProvider({ children }) {
       recommendationScope,
       setRecommendationScope,
       roundOutcomes,
+      roundResults,
       forceShuffle,
       localCorrections,
       correctCard,
@@ -412,6 +482,7 @@ export function AppStateProvider({ children }) {
       isSpectating,
       analysis,
       live,
+      holding,
       seatsKnown,
       scopeChoice,
       occupancy,
@@ -427,6 +498,7 @@ export function AppStateProvider({ children }) {
       isCountHistoryVisible,
       recommendationScope,
       roundOutcomes,
+      roundResults,
       localCorrections,
     ]
   );

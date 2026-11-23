@@ -60,7 +60,7 @@ export default function CameraFeed() {
     else if (!link.phoneOnline) offlineHint = "Waiting for the phone to connect";
     else offlineHint = "Waiting for the phone to start its camera";
   } else {
-    offlineHint = "Use the Camera button in the top bar to connect your phone";
+    offlineHint = "Open the table link from the camera host to join";
   }
 
   return (
@@ -99,10 +99,12 @@ export default function CameraFeed() {
           }}
         >
           <span style={{ fontFamily: "var(--font-display)", fontSize: "1.4rem", letterSpacing: "0.04em" }}>
-            NO CAMERA DETECTED
+            {link.holding ? "RECONNECTING…" : "NO CAMERA DETECTED"}
           </span>
-          <span style={{ fontSize: "0.85rem", color: "var(--white-dim)" }}>The table is empty.</span>
-          <span style={{ fontSize: "0.78rem" }}>{offlineHint}</span>
+          <span style={{ fontSize: "0.85rem", color: "var(--white-dim)" }}>
+            {link.holding ? "Keeping the last table for up to 15 seconds." : "The table is empty."}
+          </span>
+          {!link.holding && <span style={{ fontSize: "0.78rem" }}>{offlineHint}</span>}
         </div>
       )}
 
@@ -160,9 +162,13 @@ export default function CameraFeed() {
         }}
       >
         <span
-          className={`hlo-confidence-dot hlo-confidence-dot--${cameraConnected ? "high" : "low"}`}
+          className={`hlo-confidence-dot hlo-confidence-dot--${link.holding ? "medium" : cameraConnected ? "high" : "low"}`}
         />
-        {cameraConnected ? (link.live && !link.modelLoaded ? "LIVE (video only)" : "LIVE") : "NO CAMERA"}
+        {link.holding
+          ? "RECONNECTING"
+          : cameraConnected
+          ? link.live && !link.modelLoaded ? "LIVE (video only)" : "LIVE"
+          : "NO CAMERA"}
       </div>
     </div>
   );

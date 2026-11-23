@@ -38,11 +38,19 @@ export default function Dealer({ compact = false }) {
     correctCard("dealer", 0, cardIndex, next);
   }
 
+  // cards[0] is the up card, cards[1] the hole card ("??" while face down),
+  // and anything after that is what the dealer drew.
   const [rawUp, rawHole] = dealer.cards;
+  const drawn = dealer.cards.slice(2);
   const noCards = dealer.cards.length === 0;
   const upCard = resolvedCard(0, rawUp);
   const holeCard = resolvedCard(1, rawHole);
-  const visibleTotal = noCards ? 0 : dealer.holeCardKnown ? handValue([upCard, holeCard]) : handValue([upCard]);
+  const drawnCards = drawn.map((code, i) => resolvedCard(i + 2, code));
+  const visibleTotal = noCards
+    ? 0
+    : dealer.holeCardKnown
+    ? handValue([upCard, holeCard, ...drawnCards].filter((c) => c && c !== "??"))
+    : handValue([upCard]);
 
   return (
     <div
@@ -88,6 +96,15 @@ export default function Dealer({ compact = false }) {
               size={compact ? "sm" : "md"}
               onClick={() => setEditing({ cardIndex: 0, code: rawUp })}
             />
+            {drawnCards.map((code, i) => (
+              <div key={i + 2} className="hlo-card--enter">
+                <Card
+                  code={code}
+                  size={compact ? "sm" : "md"}
+                  onClick={() => setEditing({ cardIndex: i + 2, code: drawn[i] })}
+                />
+              </div>
+            ))}
           </div>
           <span style={{ fontFamily: "var(--font-display)", fontSize: compact ? "1.2rem" : "1.5rem" }}>
             {visibleTotal}

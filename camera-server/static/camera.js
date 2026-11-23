@@ -16,17 +16,17 @@
   const els = {
     server: $("st-server"), camera: $("st-camera"), viewers: $("st-viewers"), fps: $("st-fps"),
     notice: $("notice"), video: $("preview"), empty: $("preview-empty"),
-    start: $("btn-start"), stop: $("btn-stop"), flip: $("btn-flip"), rotate: $("btn-rotate"), snap: $("btn-snap"), timer: $("snap-timer"), snaps: $("st-snaps"), size: $("st-size"),
+    start: $("btn-start"), stop: $("btn-stop"), size: $("st-size"),
     quality: $("quality"),
   };
 
   const state = {
-    ws: null, authed: false, stream: null, facing: "environment",
+    ws: null, authed: false, stream: null,
     timer: null, busy: false, wakeLock: null, retry: 0, sent: 0, sentWindow: [],
-    upsideDown: false, lastStart: 0, lastW: 0, lastH: 0, snapshots: 0, snapshotBusy: false,
+    lastStart: 0, lastW: 0, lastH: 0,
   };
   // Shown in the preview box AND encoded for sending, so the preview is
-  // always exactly what HighLo receives (landscape, rotated if needed).
+  // always exactly what HighLo receives (the centre 16:9 window).
   const canvas = $("preview-canvas");
 
   function setPill(el, text, tone) {
@@ -108,7 +108,7 @@
   // What gets sent (and shown in the preview) is the centre 16:9 window of the
   // camera picture, upright: on a portrait phone camera that means the top and
   // bottom are cut off, exactly like the preview box. HighLo's feed is 16:9 too,
-  // so it shows the same area. "Rotate 180" is only for an upside-down picture.
+  // so it shows the same area.
   const ASPECT = 16 / 9;
   function cropRect(vw, vh) {
     if (vw / vh > ASPECT) {
@@ -134,11 +134,7 @@
     target.width = width;
     target.height = height;
     const ctx = target.getContext("2d");
-    ctx.save();
-    ctx.translate(width / 2, height / 2);
-    if (state.upsideDown) ctx.rotate(Math.PI);
-    ctx.drawImage(els.video, sx, sy, sw, sh, -width / 2, -height / 2, width, height);
-    ctx.restore();
+    ctx.drawImage(els.video, sx, sy, sw, sh, 0, 0, width, height);
     return { width, height };
   }
   function drawFrame() {
@@ -147,39 +143,6 @@
       state.lastW = width; state.lastH = height;
       setPill(els.size, `${width}×${height} (camera ${els.video.videoWidth}×${els.video.videoHeight})`);
       announceCamera(true); // HighLo needs the new size to place detection boxes
-    }
-  }
-
-  // Save one full-quality still of exactly what the server sees, on the computer running the server.
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  async function takeSnapshot() {
-    if (!state.stream || state.snapshotBusy) return;
-    state.snapshotBusy = true;
-    try {
-      // a countdown, because tapping the screen shakes a phone stand
-      for (let left = Number(els.timer.value) || 0; left > 0; left--) {
-        els.snap.textContent = `Hold still… ${left}`;
-        await sleep(1000);
-        if (!state.stream) return;
-      }
-      els.snap.textContent = "Saving…";
-      const shot = document.createElement("canvas");
-      renderCrop(shot, Infinity); // native resolution, not scaled down
-      const blob = await new Promise((resolve) => shot.toBlob(resolve, "image/jpeg", 0.95));
-      const res = await fetch("/api/snapshot", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "image/jpeg" },
-        body: blob,
-      });
-      if (!res.ok) throw new Error(String(res.status));
-      state.snapshots += 1;
-      setPill(els.snaps, `${state.snapshots} saved`, "ok");
-      notice("");
-    } catch {
-      notice("Could not save the snapshot. Is the server still running?");
-    } finally {
-      state.snapshotBusy = false;
-      els.snap.textContent = "Take snapshot";
     }
   }
 
@@ -192,7 +155,7 @@
     try {
       state.stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: { facingMode: { ideal: state.facing }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
       });
     } catch (err) {
       const denied = err && (err.name === "NotAllowedError" || err.name === "SecurityError");
@@ -207,9 +170,6 @@
     els.empty.hidden = true;
     els.start.hidden = true;
     els.stop.hidden = false;
-    els.flip.hidden = false;
-    els.rotate.hidden = false;
-    els.snap.hidden = false;
     setPill(els.camera, "On", "ok");
     keepAwake();
     announceCamera(true);
@@ -227,9 +187,6 @@
     els.empty.hidden = false;
     els.start.hidden = false;
     els.stop.hidden = true;
-    els.flip.hidden = true;
-    els.rotate.hidden = true;
-    els.snap.hidden = true;
     setPill(els.camera, "Off");
     setPill(els.size, "—");
     setPill(els.fps, "—");
@@ -287,14 +244,6 @@
   // ---- wiring -----------------------------------------------------------
   els.start.addEventListener("click", startCamera);
   els.stop.addEventListener("click", () => stopCamera(true));
-  els.flip.addEventListener("click", () => {
-    state.facing = state.facing === "environment" ? "user" : "environment";
-    startCamera();
-  });
-  els.snap.addEventListener("click", takeSnapshot);
-  els.rotate.addEventListener("click", () => {
-    state.upsideDown = !state.upsideDown;
-  });
   els.quality.addEventListener("change", () => state.stream && announceCamera(true));
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && state.stream) keepAwake();

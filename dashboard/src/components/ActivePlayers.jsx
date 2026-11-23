@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { CardCluster, handValue } from "./Card.jsx";
 import { useAppState } from "../state/AppStateContext.jsx";
 import CardCorrectionModal from "./CardCorrectionModal.jsx";
+import { RESULT_STYLE } from "../lib/outcome.js";
 
 const CONFIDENCE_LABEL = { high: "High", medium: "Medium", low: "Low" };
 
@@ -35,8 +36,9 @@ function PlayerSeat({ player, isSelf, compact, hideLabel, large }) {
 
   // Vacant = nobody was dealt in here. A seat that has a player but no cards
   // right now (between rounds) says so, instead of showing a total of 0.
+  // A seat with cards always shows them, even before it counts as occupied.
   const noCards = player.hands.every((h) => h.cards.length === 0);
-  if (!player.occupied || noCards) {
+  if (noCards) {
     return (
       <div
         className="hlo-panel"
@@ -58,10 +60,37 @@ function PlayerSeat({ player, isSelf, compact, hideLabel, large }) {
   }
 
   const mainHand = player.hands[0];
+  const isSplit = player.hands.length > 1;
   const mainResolved = mainHand.cards.map((c, i) => resolvedCard(0, i, c));
   const mainTotal = handValue(mainResolved);
-  const status = mainTotal > 21 ? "bust" : mainTotal === 21 ? "blackjack" : null;
-  const outcome = roundOutcomes ? roundOutcomes[player.seat] : null;
+  // Whole-seat overlays only for a single hand; split hands are marked one by one.
+  const status = isSplit ? null : mainTotal > 21 ? "bust" : mainTotal === 21 ? "blackjack" : null;
+  const outcomeOf = (hIdx) => (roundOutcomes ? roundOutcomes[`${player.seat}-${hIdx}`] : null);
+  const outcome = isSplit ? null : outcomeOf(0);
+
+  // Frame for one hand of a split seat: its own result tint, and a brass
+  // outline while it is the hand being played.
+  function handFrame(hand, hIdx) {
+    const result = outcomeOf(hIdx);
+    return {
+      padding: 6,
+      borderRadius: 8,
+      background: result ? RESULT_STYLE[result].tint : undefined,
+      outline: hand.isTurn ? "1px solid var(--brass)" : undefined,
+    };
+  }
+  function handTag(hand, hIdx, cards) {
+    const result = outcomeOf(hIdx);
+    const total = handValue(cards);
+    const tag = result ? RESULT_STYLE[result].label : total > 21 ? "BUST" : null;
+    return (
+      <div style={{ fontSize: "0.68rem", color: "var(--white-faint)", marginBottom: 4 }}>
+        Hand {hIdx + 1}
+        {hand.isDoubled && <span style={{ marginLeft: 6 }}>· Doubled</span>}
+        {tag && <b style={{ color: "var(--white)", marginLeft: 6 }}>{tag}</b>}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -89,7 +118,7 @@ function PlayerSeat({ player, isSelf, compact, hideLabel, large }) {
       {status === "blackjack" && (
         <div className="hlo-status-overlay hlo-status-overlay--blackjack">21</div>
       )}
-      {outcome && <div className={`hlo-round-overlay hlo-round-overlay--${outcome}`} />}
+      {outcome && <div className="hlo-round-overlay" style={{ background: RESULT_STYLE[outcome].tint }} />}
 
       <div
         style={{
@@ -139,12 +168,8 @@ function PlayerSeat({ player, isSelf, compact, hideLabel, large }) {
             .map(({ hand, hIdx }) => {
               const resolvedCards = hand.cards.map((c, i) => resolvedCard(hIdx, i, c));
               return (
-                <div key={hIdx} className="hlo-card--enter" style={{ opacity: 0.85 }}>
-                  {hand.isSplit && (
-                    <div style={{ fontSize: "0.62rem", color: "var(--white-faint)", marginBottom: 4 }}>
-                      Split hand {hIdx + 1}
-                    </div>
-                  )}
+                <div key={hIdx} className="hlo-card--enter" style={handFrame(hand, hIdx)}>
+                  {handTag(hand, hIdx, resolvedCards)}
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <CardCluster
                       cards={resolvedCards}
@@ -162,11 +187,12 @@ function PlayerSeat({ player, isSelf, compact, hideLabel, large }) {
           {player.hands.slice(0, 1).map((hand, hIdx) => {
             const resolvedCards = hand.cards.map((c, i) => resolvedCard(hIdx, i, c));
             return (
-              <div key={hIdx}>
-                {hand.isSplit && (
-                  <div style={{ fontSize: "0.68rem", color: "var(--white-faint)", marginBottom: 4 }}>
-                    Main hand
-                  </div>
+              <div key={hIdx} style={isSplit ? handFrame(hand, hIdx) : undefined}>
+                {isSplit && handTag(hand, hIdx, resolvedCards)}
+                {!isSplit && hand.isDoubled && (
+                  <span className="hlo-pill" style={{ marginBottom: 6, display: "inline-flex" }}>
+                    Doubled
+                  </span>
                 )}
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <CardCluster

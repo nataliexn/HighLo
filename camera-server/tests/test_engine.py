@@ -157,11 +157,95 @@ class EngineTests(unittest.TestCase):
         self.deal([4, 5], t)                              # seat 2 is not dealt this time
         self.assertEqual(self.occupied(), [4, 5])
 
-    def test_memory_not_changed_before_the_deal_is_complete(self):
+    def test_seat_with_a_card_is_selectable_before_the_deal_is_complete(self):
         t = self.deal([2], self.warm())
         t = run(self.e, [], t, 6)
         run(self.e, [det("6S", 0.46, 0.19), det("9H", *SEAT[5])], t, 4)   # only part of a deal is out
-        self.assertEqual(self.occupied(), [2])
+        self.assertEqual(self.occupied(), [2, 5])    # seat 5 has a card; seat 2 isn't dropped until the deal completes
+
+    def test_first_round_seats_show_from_the_first_card(self):
+        run(self.e, [det("6S", 0.46, 0.19), det("9H", *SEAT[3]), det("4D", *SEAT[6])], self.warm(), 3)
+        s = self.e.state()
+        self.assertTrue(s["seatsKnown"])
+        self.assertEqual(self.occupied(), [3, 6])
+
+    def test_seat_dealt_late_is_still_added(self):
+        t = self.deal([2, 5], self.warm())              # deal looks complete without seat 4
+        x, y = SEAT[4]
+        self.deal([2, 5], t, extra=[det("9H", x, y), det("5C", x + 0.04, y + 0.05)])
+        self.assertEqual(self.occupied(), [2, 4, 5])
+
+    def split_deal(self, apart):
+        x, y = SEAT[3]
+        return [det("6S", 0.46, 0.19), det("back", 0.57, 0.19),
+                det("8H", x + apart / 2, y), det("8C", x - apart / 2, y)]
+
+    def test_split_pair_makes_two_hands(self):
+        t = run(self.e, self.split_deal(0.03), self.warm(), 3)   # pair, close together: one hand
+        self.assertEqual(len(self.e.state()["players"][2]["hands"]), 1)
+        for step in range(1, 11):                                  # the dealer slides them apart
+            self.e.update(self.split_deal(0.03 + 0.01 * step), t)
+            t += 0.1
+        x, y = SEAT[3]
+        dets = self.split_deal(0.13) + [det("3D", x + 0.065, y + 0.06)]
+        run(self.e, dets, t, 3)                                    # one more card on the right-hand one
+        self.assertEqual(len(self.e.state()["countHistory"]), 4)   # 6S, 8H, 8C, 3D: nothing counted twice
+        s = self.e.state()
+        hands = s["players"][2]["hands"]
+        self.assertEqual([h["cards"] for h in hands], [["8H", "3D"], ["8C"]])
+        self.assertTrue(all(h["isSplit"] for h in hands))
+        self.assertTrue(hands[0]["isTurn"])
+        entry = next(e for e in s["countHistory"] if e.get("card") == "8C")
+        self.assertEqual((entry["handIndex"], entry["cardIndex"]), (1, 0))
+
+    def test_no_split_before_everyone_has_two_cards(self):
+        x, y = SEAT[3]
+        dets = [det("6S", 0.46, 0.19), det("back", 0.57, 0.19),
+                det("8H", x + 0.065, y), det("8C", x - 0.065, y), det("9D", *SEAT[5])]   # seat 5 still waiting
+        run(self.e, dets, self.warm(), 3)
+        self.assertEqual(len(self.e.state()["players"][2]["hands"]), 1)
+
+    def test_pair_stacked_towards_the_dealer_is_not_a_split(self):
+        x, y = SEAT[4]
+        dets = [det("6S", 0.46, 0.19), det("back", 0.57, 0.19),
+                det("KH", x, y + 0.08), det("QD", x + 0.02, y)]           # second card on top, nearer the dealer
+        run(self.e, dets, self.warm(), 4)
+        self.assertEqual(len(self.e.state()["players"][3]["hands"]), 1)
+
+    def test_sideways_card_is_a_double_down(self):
+        x, y = SEAT[3]
+        up = CAL["zones"]["seats"][3]["angle"]           # seat 3's upright, as the model would report it
+        hand = [det("6S", 0.46, 0.19), det("back", 0.57, 0.19),
+                dict(det("5H", x, y + 0.08), angle=up), dict(det("6C", x + 0.02, y), angle=up)]
+        x2, y2 = SEAT[5]
+        hand += [det("9H", x2, y2 + 0.08), det("5C", x2 + 0.02, y2)]
+        t = run(self.e, hand, self.warm(), 4)
+        run(self.e, hand + [dict(det("KD", x, y - 0.05, w=0.2, h=0.15), angle=up + 88)], t, 3)
+        s = self.e.state()
+        three = s["players"][2]["hands"][0]
+        self.assertEqual(three["cards"], ["5H", "6C", "KD"])
+        self.assertTrue(three["isDoubled"])
+        self.assertFalse(s["players"][2]["isTurn"])      # a doubled hand is finished
+        self.assertTrue(s["players"][4]["isTurn"])       # so the turn moves on to seat 5
+
+    def test_upright_card_is_not_a_double(self):
+        x, y = SEAT[6]
+        up = CAL["zones"]["seats"][0]["angle"]           # seat 6 is tilted about 35 degrees
+        dets = [det("6S", 0.46, 0.19), det("back", 0.57, 0.19),
+                dict(det("5H", x, y), angle=up - 4), dict(det("2C", x + 0.02, y - 0.05), angle=up + 177)]
+        run(self.e, dets, self.warm(), 4)
+        self.assertFalse(self.e.state()["players"][5]["hands"][0]["isDoubled"])
+
+    def test_short_camera_dropout_keeps_the_hand(self):
+        t = self.deal([2], self.warm())
+        before = self.e.state()
+        x, y = SEAT[2]
+        same = [det("6S", 0.46, 0.19), det("back", 0.57, 0.19), det("9H", x, y), det("5C", x + 0.04, y + 0.05)]
+        run(self.e, same, t + 12, 2)                    # 12 s with no frames, then the same table again
+        after = self.e.state()
+        self.assertEqual(len(after["countHistory"]), len(before["countHistory"]))
+        self.assertEqual(after["players"][1]["hands"][0]["cards"], ["9H", "5C"])
+        self.assertTrue(after["roundActive"])
 
     def test_hand_total(self):
         self.assertEqual(hand_total(["AS", "KH"]), 21)
