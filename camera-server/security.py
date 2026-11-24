@@ -94,22 +94,29 @@ def origin_allowed(origin: str | None, host_header: str | None, allowed: tuple[s
 # Self-signed HTTPS certificate
 # --------------------------------------------------------------------------
 def lan_addresses() -> list[str]:
-    """Best-effort list of this computer's LAN IPv4 addresses."""
-    found: set[str] = set()
+    """This computer's LAN IPv4 addresses, the one a phone on the same Wi-Fi should use first.
+
+    The first entry is the address of the network the computer actually uses to reach the
+    internet (normally the Wi-Fi). Virtual adapters (WSL, Docker, Hyper-V, VirtualBox, VPNs)
+    come after it: the computer can reach them itself, but a phone usually can't."""
+    primary = None
     try:
         probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        probe.connect(("10.255.255.255", 1))  # no packet is actually sent
-        found.add(probe.getsockname()[0])
+        probe.connect(("8.8.8.8", 80))  # picks the outgoing interface; no packet is actually sent
+        primary = probe.getsockname()[0]
         probe.close()
     except OSError:
         pass
+    others: set[str] = set()
     try:
         for addr in socket.gethostbyname_ex(socket.gethostname())[2]:
-            found.add(addr)
+            others.add(addr)
     except OSError:
         pass
-    found.discard("127.0.0.1")
-    return sorted(a for a in found if not a.startswith("169.254."))
+    usable = lambda a: a and not a.startswith(("127.", "169.254."))
+    ordered = [primary] if usable(primary) else []
+    ordered += sorted(a for a in others if usable(a) and a != primary)
+    return ordered
 
 
 def _san_entries(names: list[str]) -> list[x509.GeneralName]:

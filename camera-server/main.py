@@ -43,6 +43,11 @@ def main() -> None:
     print(f" 1. On your phone, scan this code (or open the link):\n")
     print_qr(phone_url)
     print(f"\n    {phone_url}\n")
+    if len(addresses) > 1:
+        print("    Blank page on the phone? Make sure it is on the same Wi-Fi, then try these instead:")
+        for other in addresses[1:]:
+            print(f"      {scheme}://{other}:{settings.port}/camera#t={settings.phone_token}")
+        print()
     if settings.tls:
         print("    Your phone will warn that the certificate is not trusted - that is")
         print("    expected (it is your own). Choose 'Advanced' > 'Proceed'.\n")
