@@ -44,7 +44,9 @@ GAP_SECONDS = 15.0          # no frames for longer than this => the table may ha
 PAUSE_SECONDS = 1.0         # a shorter gap (bad network) pauses every clock instead of losing the cards
 SPLIT_SEPARATION = 0.7      # a pair this many card widths apart, side by side across the seat, has been split
 SIDEWAYS_DEGREES = 45.0     # a card turned more than this from its seat's upright is a double-down card
-DEAL_STEADY_SECONDS = 1.0   # the opening deal must look the same this long before seats are read
+DEAL_STEADY_SECONDS = 1.0   # the first pass of the deal must look the same this long before seats are read
+COIN_STEADY_SECONDS = 1.0   # a coin must sit in a bet spot this long to count (a passing hand doesn't)
+COIN_GONE_SECONDS = 1.5     # ... and be missing this long to stop counting
 SEAT_COUNT = 6
 
 
@@ -182,7 +184,12 @@ class TableEngine:
         # Seats that got a card this round. They count as occupied straight away,
         # before the opening deal is complete, so a player can pick their seat.
         self.round_seats: set[int] = set()
+        # Coins / chips in the bet spots (coins.py), steadied over time.
+        self.coins_present: set[int] = set()
+        self.coin_seen_since: dict[int, float] = {}
+        self.coin_missing_since: dict[int, float] = {}
         self.splits: dict[int, tuple[int, int]] = {}   # seat -> track ids of the two split cards
+        self.opening_done = False   # this round: every dealt seat and the dealer have two cards
         self.hand_of: dict[int, int] = {}              # track id -> hand index within its seat
 
     # ---- zones ------------------------------------------------------------
@@ -200,8 +207,9 @@ class TableEngine:
         return f"seat{seat}" if dist <= 0.28 * self.W else "other"
 
     # ---- main entry --------------------------------------------------------
-    def update(self, detections: list[dict], now: float) -> bool:
-        """Feed one frame's detections. Returns True if the table state changed."""
+    def update(self, detections: list[dict], now: float, coins: set[int] | None = None) -> bool:
+        """Feed one frame's detections, and optionally the seats with a coin in their bet
+        spot (None = not checked this frame). Returns True if the table state changed."""
         before = self._signature()
         gap = now - self.last_update if self.last_update is not None else 0.0
         if PAUSE_SECONDS < gap <= GAP_SECONDS:
@@ -225,6 +233,7 @@ class TableEngine:
         self._assign_hands()
         self._deal(now)
         self._rounds(now)
+        self._coins(now, coins)
         self._shoe(now)
         return self._signature() != before
 
@@ -383,6 +392,7 @@ class TableEngine:
         self.round_seats = set()
         self.splits = {}
         self.hand_of = {}
+        self.opening_done = False
 
     def _is_sideways(self, t, seat: int) -> bool:
         """A double-down card lies across the hand. Needs the card's angle (an oriented-box model)."""
@@ -420,13 +430,18 @@ class TableEngine:
         self.hand_of = {}
         if not self.tracking:
             return
+        if not self.opening_done and self.deal_resolved:
+            counts = [len([t for t in self._cards_in(f"seat{s}") if not t.face_down]) for s in self.round_seats]
+            self.opening_done = (
+                bool(counts) and min(counts) >= 2 and len(self._cards_in("dealer")) >= 2
+            )
         for seat in range(1, SEAT_COUNT + 1):
             cards = [t for t in self._cards_in(f"seat{seat}") if not t.face_down]
             anchors = self.splits.get(seat)
             if anchors and not all(a in self.tracks for a in anchors):
                 anchors = None
                 self.splits.pop(seat, None)
-            if anchors is None and len(cards) >= 2 and self.deal_resolved:
+            if anchors is None and len(cards) >= 2 and self.opening_done:
                 a, b = cards[0], cards[1]
                 if (self._split_rank(a.code) == self._split_rank(b.code)
                         and not a.sideways and not b.sideways
@@ -451,20 +466,18 @@ class TableEngine:
                         t.entry["cardIndex"] = position
 
     def _deal(self, now) -> None:
-        """Read who is playing from the opening deal: dealer has two cards (up + hole)
-        and every seat that has a card has two. Seats that were dealt are occupied;
-        a seat that was occupied last round but is not dealt now is vacant."""
+        """Seats are settled by the FIRST PASS of the deal: every player gets one card, then the
+        dealer takes theirs. Once the dealer has a card (and it stays that way for a moment),
+        the seats that have cards are occupied and every other seat is vacant, coin or not
+        (vacant = not dealt in). A seat that gets a card later in the round is added back."""
         if not self.tracking or not self.round_active or self.deal_resolved:
             return
         dealer = [t for t in self.tracks.values() if t.zone == "dealer" and t.confirmed(t.last)]
-        per_seat = {
-            seat: len([t for t in self.tracks.values()
-                       if t.zone == f"seat{seat}" and t.confirmed(t.last) and not t.face_down])
-            for seat in range(1, SEAT_COUNT + 1)
+        dealt = {
+            seat for seat in range(1, SEAT_COUNT + 1)
+            if any(t.zone == f"seat{seat}" and t.confirmed(t.last) and not t.face_down for t in self.tracks.values())
         }
-        dealt = {seat for seat, n in per_seat.items() if n > 0}
-        ready = len(dealer) >= 2 and bool(dealt) and all(per_seat[seat] >= 2 for seat in dealt)
-        if not ready:
+        if not dealer or not (dealt or self.round_seats):
             self.deal_ready_since = None
             return
         self.deal_ready_since = self.deal_ready_since if self.deal_ready_since is not None else now
@@ -472,6 +485,28 @@ class TableEngine:
             self.seat_memory = dealt | self.round_seats
             self.seats_known = True
             self.deal_resolved = True
+
+    def _coins(self, now, coins) -> None:
+        """A coin or chip in a seat's bet spot means someone wants to play there. It opens the seat
+        only BETWEEN rounds (table cleared). During a round coins are ignored: a coin put down
+        after the deal opens the seat for the next round, once this one is swept. Taking a coin
+        away never closes a seat; only not being dealt in does (see _deal)."""
+        if coins is None:
+            return
+        for seat in range(1, SEAT_COUNT + 1):
+            if seat in coins:
+                self.coin_missing_since.pop(seat, None)
+                since = self.coin_seen_since.setdefault(seat, now)
+                if now - since >= COIN_STEADY_SECONDS:
+                    self.coins_present.add(seat)
+            else:
+                self.coin_seen_since.pop(seat, None)
+                since = self.coin_missing_since.setdefault(seat, now)
+                if now - since >= COIN_GONE_SECONDS:
+                    self.coins_present.discard(seat)
+        if self.tracking and not self.round_active and self.coins_present - self.seat_memory:
+            self.seat_memory |= self.coins_present
+            self.seats_known = True
 
     def _rounds(self, now) -> None:
         on_table = [t for t in self.tracks.values() if self._on_table(t)]
@@ -605,6 +640,7 @@ class TableEngine:
             },
             "shoeStatus": self.shoe_status,
             "roundActive": self.round_active,
+            "coins": sorted(self.coins_present),
             "waitingForRound": self.waiting_for_round,
         }
 

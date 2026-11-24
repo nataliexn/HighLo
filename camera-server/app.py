@@ -20,6 +20,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from config import Settings
 from detector import Detector, build_detector
+from coins import CoinSpotter
 from engine import TableEngine
 from hub import Hub
 from security import AuthLimiter, TicketStore, origin_allowed, tokens_equal
@@ -81,15 +82,17 @@ def create_app(
     detector = detector or build_detector(
         settings.model_path, settings.conf, settings.imgsz, settings.device
     )
-    engine = None
+    engine = coins = None
     if settings.calibration_path.exists():
         try:
-            engine = TableEngine.from_file(settings.calibration_path)
+            calibration = json.loads(settings.calibration_path.read_text())
+            engine = TableEngine(calibration)
+            coins = CoinSpotter(calibration)
         except Exception as exc:
             log.error("Could not load %s (%s) - no table tracking.", settings.calibration_path, exc)
     else:
         log.warning("No calibration at %s - run calibrate.py. Card boxes only, no table tracking.", settings.calibration_path)
-    hub = Hub(detector, settings.max_frame_bytes, engine=engine)
+    hub = Hub(detector, settings.max_frame_bytes, engine=engine, coins=coins)
     tickets = TicketStore()
     limiter = AuthLimiter()
 

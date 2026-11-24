@@ -88,9 +88,10 @@ export default function SeatSelection() {
     setSelectedSeat(seat);
   }
 
-  let hint = "Only seats the camera sees occupied can be selected.";
+  let hint = "A seat opens when a coin or chip is put down in front of it between rounds, or when it is dealt a card.";
   if (isDemo) hint = "This is the sample table: pick any occupied seat to look around.";
-  else if (!seatsKnown) hint = "A seat opens up as soon as the dealer gives it a card. You can spectate until then.";
+  else if (!seatsKnown)
+    hint = "Put a coin or chip in front of your seat (or wait to be dealt in) and it opens here. You can spectate until then.";
 
   return (
     <>

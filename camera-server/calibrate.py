@@ -94,6 +94,10 @@ def main():
         cx, cy = s["x"] * fw, s["y"] * fh
         cv2.polylines(prev, [card_quad(cx, cy, cw * 1.4, chh * 1.5, s["angle"]).astype(np.int32)], True, (0, 255, 255), 2)
         cv2.putText(prev, f"seat {s['seat']}", (int(cx) - 30, int(cy) + 5), 0, 0.7, (0, 255, 255), 2)
+    from coins import CoinSpotter                     # where coins / chips are looked for (seating)
+    for seat, (bx, by, br) in CoinSpotter({"zones": zones}).spots(fw, fh).items():
+        cv2.circle(prev, (int(bx), int(by)), int(br), (0, 200, 0), 1)
+        cv2.putText(prev, f"bet {seat}", (int(bx) - 22, int(by) + 5), 0, 0.5, (0, 200, 0), 1)
     for name, col in (("dealer", (255, 150, 0)), ("shoe", (0, 0, 255)), ("discard", (255, 0, 255))):
         z = zones[name]
         cx, cy = z["x"] * fw, z["y"] * fh

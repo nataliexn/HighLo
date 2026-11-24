@@ -36,16 +36,23 @@ function RequireSeat({ children }) {
 // dealt there in the latest round) and asks what to do: take another seat,
 // spectate, or leave. Only runs while the camera is live and the server has
 // actually read the seats, so a dropped connection never kicks anyone.
+const VACANCY_DELAY_MS = 4000;
+
 function VacancyWatcher() {
   const { occupancy, selectedSeat, setSelectedSeat, startSpectating, logout, live, seatsKnown } = useAppState();
   const [kickedFrom, setKickedFrom] = useState(null);
   const navigate = useNavigate();
 
+  // Waits VACANCY_DELAY_MS before asking: a card that is read a moment late (covered
+  // by the dealer's hand, glare, a slow connection) brings the seat back first, and
+  // then the player never sees the popup.
+  const vacant = Boolean(live && seatsKnown && selectedSeat && occupancy[selectedSeat] === false);
   useEffect(() => {
-    if (live && seatsKnown && selectedSeat && occupancy[selectedSeat] === false) {
-      setKickedFrom(selectedSeat);
-    }
-  }, [live, seatsKnown, occupancy, selectedSeat]);
+    if (!vacant) return undefined;
+    const seat = selectedSeat;
+    const timer = setTimeout(() => setKickedFrom(seat), VACANCY_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [vacant, selectedSeat]);
 
   if (!kickedFrom) return null;
 

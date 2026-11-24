@@ -157,11 +157,13 @@ class EngineTests(unittest.TestCase):
         self.deal([4, 5], t)                              # seat 2 is not dealt this time
         self.assertEqual(self.occupied(), [4, 5])
 
-    def test_seat_with_a_card_is_selectable_before_the_deal_is_complete(self):
+    def test_seat_with_a_card_is_selectable_before_the_first_pass_is_complete(self):
         t = self.deal([2], self.warm())
         t = run(self.e, [], t, 6)
-        run(self.e, [det("6S", 0.46, 0.19), det("9H", *SEAT[5])], t, 4)   # only part of a deal is out
-        self.assertEqual(self.occupied(), [2, 5])    # seat 5 has a card; seat 2 isn't dropped until the deal completes
+        t = run(self.e, [det("9H", *SEAT[5])], t, 3)        # seat 5's first card, the dealer hasn't taken one yet
+        self.assertEqual(self.occupied(), [2, 5])            # seat 2 isn't dropped before the first pass is done
+        run(self.e, [det("6S", 0.46, 0.19), det("9H", *SEAT[5])], t, 3)   # the dealer's card ends the first pass
+        self.assertEqual(self.occupied(), [5])               # seat 2 wasn't dealt in: vacant
 
     def test_first_round_seats_show_from_the_first_card(self):
         run(self.e, [det("6S", 0.46, 0.19), det("9H", *SEAT[3]), det("4D", *SEAT[6])], self.warm(), 3)
@@ -255,6 +257,54 @@ class EngineTests(unittest.TestCase):
         self.assertAlmostEqual(s["players"][1]["detection"], 0.62, places=2)    # the least certain card
         self.assertEqual(s["players"][1]["confidence"], "medium")
         self.assertAlmostEqual(s["dealer"]["detection"], 0.95, places=2)
+
+    # ---- coins / chips in the bet spots (seating) ---------------------------------
+    def coins(self, seats, t, seconds, dets=()):
+        n = int(seconds * 10)
+        for i in range(n):
+            self.e.update(list(dets), t + i / 10, coins=set(seats))
+        return t + seconds
+
+    def test_coin_between_rounds_opens_the_seat(self):
+        t = self.coins({4}, self.warm(), 0.5)
+        self.assertEqual(self.occupied(), [])                # a moment isn't enough (a hand passing by)
+        self.coins({4}, t, 1.0)
+        self.assertEqual(self.occupied(), [4])
+        self.assertTrue(self.e.state()["seatsKnown"])
+
+    def test_taking_the_coin_away_does_not_close_the_seat(self):
+        t = self.coins({4}, self.warm(), 2)
+        self.coins(set(), t, 10)                             # unsure what to bet
+        self.assertEqual(self.occupied(), [4])
+
+    def test_seat_with_a_coin_but_no_card_is_vacant_after_the_first_pass(self):
+        t = self.coins({2, 4}, self.warm(), 2)
+        self.assertEqual(self.occupied(), [2, 4])
+        dealt = [det("9H", *SEAT[2]), det("6S", 0.46, 0.19)]  # seat 2 and the dealer: seat 4 skipped
+        self.coins({2, 4}, t, 3, dealt)
+        self.assertEqual(self.occupied(), [2])
+
+    def test_cards_without_a_coin_still_open_the_seat(self):
+        dealt = [det("9H", *SEAT[6]), det("6S", 0.46, 0.19)]
+        self.coins(set(), self.warm(), 3, dealt)
+        self.assertEqual(self.occupied(), [6])
+
+    def test_coin_put_down_during_a_round_counts_from_the_next_round(self):
+        dealt = [det("9H", *SEAT[2]), det("5C", SEAT[2][0] + 0.04, SEAT[2][1] + 0.05),
+                 det("6S", 0.46, 0.19), det("back", 0.57, 0.19)]
+        t = self.coins(set(), self.warm(), 3, dealt)
+        t = self.coins({5}, t, 4, dealt)                     # seat 5's coin arrives mid-round
+        self.assertEqual(self.occupied(), [2])               # not this round
+        t = self.coins({5}, t, 6)                            # table swept, round over
+        self.assertFalse(self.e.state()["roundActive"])
+        self.assertEqual(self.occupied(), [2, 5])
+
+    def test_coins_ignored_while_waiting_for_a_round_joined_midway(self):
+        out = [det("QH", *DEALER), det("QD", *SEAT[2])]
+        t = self.coins({3}, 0, 6, out)                       # camera starts mid-round
+        self.assertEqual(self.occupied(), [])
+        self.coins({3}, t, 4)                                # swept: now it counts
+        self.assertEqual(self.occupied(), [3])
 
     def test_hand_total(self):
         self.assertEqual(hand_total(["AS", "KH"]), 21)
