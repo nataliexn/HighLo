@@ -54,6 +54,18 @@ class DetectorTests(unittest.TestCase):
         # a card lying sideways
         self.assertAlmostEqual(abs(long_side_angle(90, 60, 0.0)), 90.0)
 
+    def test_missing_gpu_falls_back_to_cpu(self):
+        from unittest import mock
+        import detector
+        fake_torch = mock.MagicMock()
+        fake_torch.cuda.is_available.return_value = False
+        with mock.patch.dict(sys.modules, {"torch": fake_torch}), self.assertLogs("highlo.detector", "WARNING"):
+            self.assertEqual(detector.usable_device("0"), "cpu")
+        fake_torch.cuda.is_available.return_value = True
+        with mock.patch.dict(sys.modules, {"torch": fake_torch}):
+            self.assertEqual(detector.usable_device("0"), "0")
+        self.assertIsNone(detector.usable_device(""))
+
     def test_oriented_model_reports_angles(self):
         det = YoloDetector.__new__(YoloDetector)
         det.conf, det.imgsz, det.device = 0.5, 640, None

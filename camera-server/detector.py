@@ -48,6 +48,31 @@ def long_side_angle(w: float, h: float, rotation: float) -> float:
     return (angle + 90.0) % 180.0 - 90.0
 
 
+def usable_device(device: str) -> str | None:
+    """DEVICE from .env, or the CPU when it asks for a GPU this Python can't use.
+
+    Ultralytics would otherwise fail on every single frame. The usual cause is a
+    CPU-only PyTorch, for example when the server is started from a virtual
+    environment that has its own copy of torch."""
+    device = (device or "").strip()
+    if not device or device.lower() in ("cpu", "mps"):
+        return device or None
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return device
+        build = getattr(torch, "__version__", "unknown version")
+    except ImportError:
+        build = "not installed"
+    log.warning(
+        "DEVICE=%s asks for an NVIDIA GPU, but this Python's PyTorch (%s) can't use one, so detection runs on "
+        "the CPU (slow). Start the server with the Python that has the CUDA build of torch, or install it here.",
+        device, build,
+    )
+    return "cpu"
+
+
 class Detector(Protocol):
     loaded: bool
     name: str | None
@@ -74,7 +99,7 @@ class YoloDetector:
         self.name = model_path.name
         self.conf = conf
         self.imgsz = imgsz
-        self.device = device or None
+        self.device = usable_device(device)
         self.model = YOLO(str(model_path))
 
     def predict(self, bgr_image) -> list[dict]:
