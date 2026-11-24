@@ -110,6 +110,11 @@ function saveLocal(key, value) {
   }
 }
 
+/** A card as this viewer sees it: their correction for that card (by id, else by slot), or the reading. */
+export function fixCard(corrections, seat, handIndex, cardIndex, code, cardId) {
+  return (cardId && corrections[`id:${cardId}`]) || corrections[`${seat}-${handIndex}-${cardIndex}`] || code;
+}
+
 export function AppStateProvider({ children }) {
   // ---- Auth / session -------------------------------------------------
   // isGuest=true and isAuthenticated=false are the sane defaults for a
@@ -212,17 +217,20 @@ export function AppStateProvider({ children }) {
     if (canToggleRecommendationView) setScopeChoice(next);
   }
 
-  // Per-user card corrections. Keyed by "seat-handIndex-cardIndex" (seat
-  // can be a numeric seat or the string "dealer") so a correction only
-  // ever affects this browser's view, never the shared detection state.
+  // Per-user card corrections. Keyed by the card's id from the camera server
+  // ("id:c42"), so a correction stays on that physical card even if the model
+  // relabels it or another card is read in front of it; the slot key
+  // "seat-handIndex-cardIndex" is the fallback (sample table). A correction
+  // only ever affects this browser's view, never the shared detection state.
   // They last for the current round only (cleared when a new round starts).
   const [localCorrections, setLocalCorrections] = useState({});
 
-  function correctCard(seat, handIndex, cardIndex, newCode) {
+  function correctCard(seat, handIndex, cardIndex, newCode, cardId) {
     setLocalCorrections((prev) => ({
       ...prev,
-      [`${seat}-${handIndex}-${cardIndex}`]: newCode,
+      [cardId ? `id:${cardId}` : `${seat}-${handIndex}-${cardIndex}`]: newCode,
     }));
+    if (cardId) return; // the history view picks it up by id (countHistoryView below)
     // Keep the Running Count history in sync: the history entry dealt
     // from this exact (seat, handIndex, cardIndex) slot — tagged that
     // way in mockData.js's buildCurrentHandEntries — gets its card/value
@@ -250,7 +258,18 @@ export function AppStateProvider({ children }) {
   // cards counted / remaining in a 6-deck shoe) so the Running Count
   // component and page always agree, and update the instant a card is
   // added — no separate "runningCount" field to keep in sync by hand.
-  const countStats = useMemo(() => computeCountStats(countHistory, TOTAL_DECKS), [countHistory]);
+  // The history as this viewer sees it: the server's entries with this viewer's corrections.
+  const countHistoryView = useMemo(
+    () =>
+      countHistory.map((entry) => {
+        const fixed = entry.id ? localCorrections[`id:${entry.id}`] : undefined;
+        return fixed
+          ? { ...entry, card: fixed, value: fixed === "??" ? 0 : hiLoValue(fixed), isHiddenCard: false }
+          : entry;
+      }),
+    [countHistory, localCorrections]
+  );
+  const countStats = useMemo(() => computeCountStats(countHistoryView, TOTAL_DECKS), [countHistoryView]);
 
   // ---- Round results ------------------------------------------------------
   // Once the dealer stands (17+) or busts, every hand gets a result; a split
@@ -258,13 +277,13 @@ export function AppStateProvider({ children }) {
   // up after the table is swept and clear when the next round starts.
   const [roundResults, setRoundResults] = useState(null);
   const corrected = useMemo(() => {
-    const fix = (seat, handIndex, cards) =>
-      cards.map((c, i) => localCorrections[`${seat}-${handIndex}-${i}`] || c);
+    const fix = (seat, handIndex, cards, ids) =>
+      cards.map((c, i) => fixCard(localCorrections, seat, handIndex, i, c, ids && ids[i]));
     return {
-      dealer: { ...dealer, cards: fix("dealer", 0, dealer.cards) },
+      dealer: { ...dealer, cards: fix("dealer", 0, dealer.cards, dealer.ids) },
       players: players.map((p) => ({
         ...p,
-        hands: p.hands.map((h, hi) => ({ ...h, cards: fix(p.seat, hi, h.cards) })),
+        hands: p.hands.map((h, hi) => ({ ...h, cards: fix(p.seat, hi, h.cards, h.ids) })),
       })),
     };
   }, [players, dealer, localCorrections]);
@@ -272,10 +291,80 @@ export function AppStateProvider({ children }) {
     () => (dealerFinished(corrected.dealer) ? buildRoundResults(corrected.players, corrected.dealer) : null),
     [corrected]
   );
+  // Once shown, the results stay put while the cards are cleared away (taking cards
+  // off would otherwise change totals and flip the results), and go once the
+  // table is empty, back to "waiting for the next round".
+  const cardsOnTable =
+    players.reduce((n, p) => n + p.hands.reduce((m, h) => m + h.cards.length, 0), 0) + dealer.cards.length;
+  const resultsLock = useRef({ shown: false, cards: 0 });
   useEffect(() => {
-    if (liveResults && liveResults.length) setRoundResults(liveResults);
-    else if (dealer.cards.length > 0) setRoundResults(null); // dealer still drawing (or a misread was fixed)
-  }, [liveResults, dealer.cards.length]);
+    const lock = resultsLock.current;
+    if (cardsOnTable === 0) {
+      lock.shown = false;
+      lock.cards = 0;
+      setRoundResults(null);
+      return;
+    }
+    if (liveResults && liveResults.length && (!lock.shown || cardsOnTable >= lock.cards)) {
+      lock.shown = true; // first time, or a card was corrected / added while nothing is being cleared
+      lock.cards = cardsOnTable;
+      setRoundResults(liveResults);
+    } else if (!lock.shown) {
+      setRoundResults(null); // dealer still drawing
+    }
+    // shown and cards are going: the table is being cleared, keep the results as they were
+  }, [liveResults, cardsOnTable]);
+  // ---- Whose turn (manual adjust) ----------------------------------------
+  // The camera guesses whose turn it is from the cards. Previous / Next player
+  // (Active Players panel) move it by hand, for this viewer. The adjustment
+  // holds until the camera's own guess moves on (e.g. a card lands on another
+  // hand) or a new round starts.
+  const detectedTurn = useMemo(() => {
+    for (const p of players) {
+      const hi = p.hands.findIndex((h) => h.isTurn);
+      if (hi >= 0) return `${p.seat}-${hi}`;
+      if (p.isTurn) return `${p.seat}-0`;
+    }
+    return "";
+  }, [players]);
+  const [turnOverride, setTurnOverride] = useState(null); // { seat, handIndex, base }
+  const playersView = useMemo(() => {
+    if (!turnOverride || turnOverride.base !== detectedTurn) return players;
+    return players.map((p) => ({
+      ...p,
+      isTurn: p.seat === turnOverride.seat,
+      hands: p.hands.map((h, hi) => ({ ...h, isTurn: p.seat === turnOverride.seat && hi === turnOverride.handIndex })),
+    }));
+  }, [players, turnOverride, detectedTurn]);
+  // hands in play order: seat 1 -> 6, split hand 1 before hand 2
+  const turnOrder = useMemo(
+    () =>
+      [...players]
+        .sort((a, b) => a.seat - b.seat)
+        .flatMap((p) => p.hands.map((h, hi) => ({ seat: p.seat, handIndex: hi, has: h.cards.length > 0 })))
+        .filter((h) => h.has),
+    [players]
+  );
+  const currentTurnIndex = useMemo(() => {
+    for (const p of playersView) {
+      const hi = p.hands.findIndex((h) => h.isTurn);
+      if (hi >= 0) return turnOrder.findIndex((t) => t.seat === p.seat && t.handIndex === hi);
+    }
+    return -1;
+  }, [playersView, turnOrder]);
+  function stepTurn(direction) {
+    if (turnOrder.length === 0) return;
+    const from = currentTurnIndex < 0 ? (direction > 0 ? -1 : turnOrder.length) : currentTurnIndex;
+    const to = Math.max(0, Math.min(turnOrder.length - 1, from + direction));
+    setTurnOverride({ ...turnOrder[to], base: detectedTurn });
+  }
+  const turnControls = {
+    canPrevious: turnOrder.length > 0 && currentTurnIndex !== 0,
+    canNext: turnOrder.length > 0 && currentTurnIndex !== turnOrder.length - 1,
+    previous: () => stepTurn(-1),
+    next: () => stepTurn(1),
+  };
+
   const roundOutcomes = useMemo(() => {
     const map = {};
     (roundResults || []).forEach((r) => {
@@ -402,6 +491,8 @@ export function AppStateProvider({ children }) {
         round.played = false;
         setLocalCorrections({}); // corrections belong to the round they were made in
         setRoundResults(null);
+        resultsLock.current = { shown: false, cards: 0 };
+        setTurnOverride(null);
       }
       if (event.roundActive && me.selectedSeat && event.players) {
         const mine = event.players.find((p) => p.seat === me.selectedSeat);
@@ -521,10 +612,11 @@ export function AppStateProvider({ children }) {
       isDemo,
       seatsKnown,
       occupancy,
-      players,
+      players: playersView,
+      turnControls,
       dealer,
       recommendation,
-      countHistory,
+      countHistory: countHistoryView,
       countStats,
       shoeStats,
       analysis,
@@ -557,9 +649,12 @@ export function AppStateProvider({ children }) {
       scopeChoice,
       occupancy,
       players,
+      playersView,
+      turnControls,
       dealer,
       recommendation,
       countHistory,
+      countHistoryView,
       countStats,
       shoeStats,
       analysis,

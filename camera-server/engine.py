@@ -36,17 +36,21 @@ MIN_SHARE = 0.6             # share of weighted votes the winning label needs
 MIN_MEAN_CONF = 0.45
 VOTE_DECAY = 0.92           # older frames fade, so a flipped card re-labels itself
 LOST_SECONDS = 2.0          # a card unseen this long is gone
-ROUND_END_SECONDS = 2.5     # table clear for this long => round over
+COUNT_SETTLE_SECONDS = 1.5  # a card's label must hold this long before it goes into the running count
+REPLACE_SECONDS = 4.0       # a card seen again in the same spot within this long takes over the old count entry
+FLEETING_SECONDS = 4.0      # a counted card that vanishes after being on the table less than this was a misread
+FLIP_HITS = 2               # face-up sightings that turn a face-down card over at once
+CLEAR_SEEN_SECONDS = 0.7    # a card not seen for this long no longer keeps the round going
+ROUND_END_SECONDS = 2.0     # table clear for this long => round over
 JOIN_DECISION_SECONDS = 3.0 # look at the discard pile this long after starting
 SHUFFLE_EMPTY_SECONDS = 4.0 # discard pile gone this long (between rounds) => shuffle
 DUP_IOU = 0.7              # two boxes this overlapped are one card seen twice (different labels)
+DUP_COVER = 0.6            # ... or (same rank) when this much of the smaller box lies inside the other
 GAP_SECONDS = 15.0          # no frames for longer than this => the table may have changed: start over
 PAUSE_SECONDS = 1.0         # a shorter gap (bad network) pauses every clock instead of losing the cards
 SPLIT_SEPARATION = 0.7      # a pair this many card widths apart, side by side across the seat, has been split
 SIDEWAYS_DEGREES = 45.0     # a card turned more than this from its seat's upright is a double-down card
-DEAL_STEADY_SECONDS = 1.0   # the first pass of the deal must look the same this long before seats are read
-COIN_STEADY_SECONDS = 1.0   # a coin must sit in a bet spot this long to count (a passing hand doesn't)
-COIN_GONE_SECONDS = 1.5     # ... and be missing this long to stop counting
+DEAL_STEADY_SECONDS = 1.0   # the opening deal must look the same this long before seats are read
 SEAT_COUNT = 6
 
 
@@ -76,6 +80,27 @@ def hand_total(cards: list[str]) -> int:
     return total
 
 
+def _cover(a, b) -> float:
+    """How much of the smaller box lies inside the other (1 = fully inside)."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+    return ix * iy / smaller if smaller > 0 else 0.0
+
+
+def _rank(code) -> str | None:
+    return code[:-1] if code and code != "back" else code
+
+
+def _same_card(box_a, code_a, box_b, code_b) -> bool:
+    """Two boxes that are one physical card: heavily overlapping, or (same rank, e.g. QH / QD,
+    a partial second box) one mostly inside the other. A different card lying on top of
+    another (a double, a hit) is not merged."""
+    if _iou(box_a, box_b) >= DUP_IOU:
+        return True
+    return _rank(code_a) == _rank(code_b) and _cover(box_a, box_b) >= DUP_COVER
+
+
 def _iou(a, b) -> float:
     ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
     iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
@@ -98,13 +123,28 @@ class Track:
     entry: dict | None = None     # the count-history entry made for this card
     angles: list = field(default_factory=list)   # long-side angles seen (oriented-box model only)
     sideways: bool = False        # decided once, when the card is confirmed (it is on top, fully visible then)
+    cid: str = ""                 # stable card id for HighLo (kept when a misread is replaced)
+    label_since: float = 0.0      # when the current label became the leading one
+    flip_hits: int = 0
 
     def add(self, code: str, conf: float, box, now: float, zone: str, angle=None) -> None:
         if angle is not None and len(self.angles) < 30:
             self.angles.append(float(angle))
+        before = self.code if self.votes else None
+        if before == "back" and code != "back":
+            # a face-down card turned over: a couple of face-up sightings settle it,
+            # instead of waiting for all the old "back" votes to fade
+            self.flip_hits += 1
+            if self.flip_hits >= FLIP_HITS:
+                self.votes = Counter()
+                self.flip_hits = 0
+        elif code == "back":
+            self.flip_hits = 0
         for k in self.votes:                 # recent frames count more (a card can be turned over)
             self.votes[k] *= VOTE_DECAY
         self.votes[code] += conf
+        if self.code != before:
+            self.label_since = now
         self.conf_sum = self.conf_sum * VOTE_DECAY + conf
         self.hits += 1
         self.box = box
@@ -136,6 +176,10 @@ class Track:
     def face_down(self) -> bool:
         return self.code == "back"
 
+    def settled(self, now: float) -> bool:
+        """Confirmed, and its label has held long enough to go into the running count."""
+        return self.confirmed(now) and self.last - self.label_since >= COUNT_SETTLE_SECONDS
+
 
 class TableEngine:
     def __init__(self, calibration: dict):
@@ -160,6 +204,8 @@ class TableEngine:
         self._next_id = 1
         self._order = 0
         self.history: list[dict] = []
+        # counted cards that just left the table: (entry, box, zone, lost at, time on table)
+        self.recently_lost: list[tuple] = []
         self.hand_no = 0
         self.hands_since_shuffle = 0
         self.last_shuffle_hand = 0
@@ -184,12 +230,7 @@ class TableEngine:
         # Seats that got a card this round. They count as occupied straight away,
         # before the opening deal is complete, so a player can pick their seat.
         self.round_seats: set[int] = set()
-        # Coins / chips in the bet spots (coins.py), steadied over time.
-        self.coins_present: set[int] = set()
-        self.coin_seen_since: dict[int, float] = {}
-        self.coin_missing_since: dict[int, float] = {}
         self.splits: dict[int, tuple[int, int]] = {}   # seat -> track ids of the two split cards
-        self.opening_done = False   # this round: every dealt seat and the dealer have two cards
         self.hand_of: dict[int, int] = {}              # track id -> hand index within its seat
 
     # ---- zones ------------------------------------------------------------
@@ -207,9 +248,8 @@ class TableEngine:
         return f"seat{seat}" if dist <= 0.28 * self.W else "other"
 
     # ---- main entry --------------------------------------------------------
-    def update(self, detections: list[dict], now: float, coins: set[int] | None = None) -> bool:
-        """Feed one frame's detections, and optionally the seats with a coin in their bet
-        spot (None = not checked this frame). Returns True if the table state changed."""
+    def update(self, detections: list[dict], now: float) -> bool:
+        """Feed one frame's detections. Returns True if the table state changed."""
         before = self._signature()
         gap = now - self.last_update if self.last_update is not None else 0.0
         if PAUSE_SECONDS < gap <= GAP_SECONDS:
@@ -233,7 +273,6 @@ class TableEngine:
         self._assign_hands()
         self._deal(now)
         self._rounds(now)
-        self._coins(now, coins)
         self._shoe(now)
         return self._signature() != before
 
@@ -256,7 +295,8 @@ class TableEngine:
         Keep the more confident one, so it can't be counted twice."""
         kept = []
         for d in sorted(detections, key=lambda d: -float(d.get("conf", 0))):
-            if all(_iou(d["box"], k["box"]) < DUP_IOU for k in kept):
+            code = d.get("code") or d.get("label")
+            if not any(_same_card(d["box"], code, k["box"], k.get("code") or k.get("label")) for k in kept):
                 kept.append(d)
         return kept
 
@@ -315,9 +355,9 @@ class TableEngine:
         for di, (code, conf, box, zone, angle) in enumerate(dets):
             if di in used_d:
                 continue
-            if any(_iou(box, t.box) >= DUP_IOU for t in self.tracks.values()):
+            if any(_same_card(box, code, t.box, t.code) for t in self.tracks.values()):
                 continue          # a second box on a card we already follow
-            t = Track(self._next_id, box, zone, now, now)
+            t = Track(self._next_id, box, zone, now, now, cid=f"c{self._next_id}", label_since=now)
             self._next_id += 1
             # a face-down dealer card that was just turned over keeps its place in the order
             ghost = next(
@@ -328,6 +368,7 @@ class TableEngine:
             if ghost is not None:
                 t.order = ghost.order
                 t.entry = ghost.entry
+                t.cid = ghost.cid
                 del self.tracks[ghost.id]
             else:
                 self._order += 1
@@ -337,7 +378,34 @@ class TableEngine:
 
     def _drop_lost(self, now) -> None:
         for tid in [i for i, t in self.tracks.items() if now - t.last > LOST_SECONDS]:
-            del self.tracks[tid]
+            t = self.tracks.pop(tid)
+            if t.entry is not None and self.round_active:
+                self.recently_lost.append((t.entry, t.box, t.zone, now, t.last - t.first, t.cid))
+        # A counted card that left the table and wasn't seen again in its spot: a real card
+        # (it was on the table a while, e.g. a bust hand taken away) stays counted; one that
+        # was only there a moment was a misread and comes out of the history.
+        keep = []
+        for item in self.recently_lost:
+            entry, _, _, lost_at, on_table, _ = item
+            if now - lost_at < REPLACE_SECONDS:
+                keep.append(item)
+            elif on_table < FLEETING_SECONDS and entry in self.history:
+                self.history.remove(entry)
+        self.recently_lost = keep
+
+    def _take_over(self, t):
+        """A card that settles where a counted card just vanished is that card seen again
+        (it was covered, or relabelled): it takes over the old entry instead of adding one."""
+        best = None
+        for i, (entry, box, zone, _, _, cid) in enumerate(self.recently_lost):
+            if zone == t.zone and (_iou(box, t.box) >= 0.3 or _cover(box, t.box) >= DUP_COVER):
+                best = i
+                break
+        if best is None:
+            return False
+        entry, _, _, _, _, cid = self.recently_lost.pop(best)
+        t.entry, t.cid = entry, cid
+        return True
 
     # ---- counting ------------------------------------------------------------
     def _table_tracks(self, confirmed_only=True, now=None):
@@ -357,7 +425,11 @@ class TableEngine:
             if not t.confirmed(t.last) or t.face_down:
                 continue
             code = t.code
-            if t.entry is None:
+            if t.entry is None and not t.settled(t.last):
+                continue                              # shown, but not counted until its label holds
+            if t.entry is None and self._take_over(t):
+                pass                                  # the same card seen again: falls through to the relabel below
+            elif t.entry is None:
                 if not self.round_active:
                     self._start_round()
                 if t.zone.startswith("seat"):
@@ -368,8 +440,8 @@ class TableEngine:
                     if self.deal_resolved:          # e.g. a card the deal check missed
                         self.seat_memory.add(seat)
                 t.entry = {
+                    "id": t.cid,
                     "card": code, "value": hi_lo(code), "hand": self.hand_no,
-                    "handStart": not any(e.get("hand") == self.hand_no for e in self.history),
                     "seat": "dealer" if t.zone == "dealer" else int(t.zone[4:]),
                     "handIndex": 0,
                     # position within the hand, so HighLo can match a correction to this entry
@@ -378,7 +450,8 @@ class TableEngine:
                     "_order": t.order,
                 }
                 self.history.append(t.entry)
-            elif t.entry["card"] != code:          # the detector changed its mind
+                continue
+            if t.entry["card"] != code:            # the detector changed its mind: replace, don't add
                 t.entry["card"] = code
                 t.entry["value"] = hi_lo(code)
 
@@ -392,7 +465,7 @@ class TableEngine:
         self.round_seats = set()
         self.splits = {}
         self.hand_of = {}
-        self.opening_done = False
+        self.recently_lost = []
 
     def _is_sideways(self, t, seat: int) -> bool:
         """A double-down card lies across the hand. Needs the card's angle (an oriented-box model)."""
@@ -430,18 +503,13 @@ class TableEngine:
         self.hand_of = {}
         if not self.tracking:
             return
-        if not self.opening_done and self.deal_resolved:
-            counts = [len([t for t in self._cards_in(f"seat{s}") if not t.face_down]) for s in self.round_seats]
-            self.opening_done = (
-                bool(counts) and min(counts) >= 2 and len(self._cards_in("dealer")) >= 2
-            )
         for seat in range(1, SEAT_COUNT + 1):
             cards = [t for t in self._cards_in(f"seat{seat}") if not t.face_down]
             anchors = self.splits.get(seat)
             if anchors and not all(a in self.tracks for a in anchors):
                 anchors = None
                 self.splits.pop(seat, None)
-            if anchors is None and len(cards) >= 2 and self.opening_done:
+            if anchors is None and len(cards) >= 2 and self.deal_resolved:
                 a, b = cards[0], cards[1]
                 if (self._split_rank(a.code) == self._split_rank(b.code)
                         and not a.sideways and not b.sideways
@@ -466,18 +534,20 @@ class TableEngine:
                         t.entry["cardIndex"] = position
 
     def _deal(self, now) -> None:
-        """Seats are settled by the FIRST PASS of the deal: every player gets one card, then the
-        dealer takes theirs. Once the dealer has a card (and it stays that way for a moment),
-        the seats that have cards are occupied and every other seat is vacant, coin or not
-        (vacant = not dealt in). A seat that gets a card later in the round is added back."""
+        """Read who is playing from the opening deal: dealer has two cards (up + hole)
+        and every seat that has a card has two. Seats that were dealt are occupied;
+        a seat that was occupied last round but is not dealt now is vacant."""
         if not self.tracking or not self.round_active or self.deal_resolved:
             return
         dealer = [t for t in self.tracks.values() if t.zone == "dealer" and t.confirmed(t.last)]
-        dealt = {
-            seat for seat in range(1, SEAT_COUNT + 1)
-            if any(t.zone == f"seat{seat}" and t.confirmed(t.last) and not t.face_down for t in self.tracks.values())
+        per_seat = {
+            seat: len([t for t in self.tracks.values()
+                       if t.zone == f"seat{seat}" and t.confirmed(t.last) and not t.face_down])
+            for seat in range(1, SEAT_COUNT + 1)
         }
-        if not dealer or not (dealt or self.round_seats):
+        dealt = {seat for seat, n in per_seat.items() if n > 0}
+        ready = len(dealer) >= 2 and bool(dealt) and all(per_seat[seat] >= 2 for seat in dealt)
+        if not ready:
             self.deal_ready_since = None
             return
         self.deal_ready_since = self.deal_ready_since if self.deal_ready_since is not None else now
@@ -486,30 +556,8 @@ class TableEngine:
             self.seats_known = True
             self.deal_resolved = True
 
-    def _coins(self, now, coins) -> None:
-        """A coin or chip in a seat's bet spot means someone wants to play there. It opens the seat
-        only BETWEEN rounds (table cleared). During a round coins are ignored: a coin put down
-        after the deal opens the seat for the next round, once this one is swept. Taking a coin
-        away never closes a seat; only not being dealt in does (see _deal)."""
-        if coins is None:
-            return
-        for seat in range(1, SEAT_COUNT + 1):
-            if seat in coins:
-                self.coin_missing_since.pop(seat, None)
-                since = self.coin_seen_since.setdefault(seat, now)
-                if now - since >= COIN_STEADY_SECONDS:
-                    self.coins_present.add(seat)
-            else:
-                self.coin_seen_since.pop(seat, None)
-                since = self.coin_missing_since.setdefault(seat, now)
-                if now - since >= COIN_GONE_SECONDS:
-                    self.coins_present.discard(seat)
-        if self.tracking and not self.round_active and self.coins_present - self.seat_memory:
-            self.seat_memory |= self.coins_present
-            self.seats_known = True
-
     def _rounds(self, now) -> None:
-        on_table = [t for t in self.tracks.values() if self._on_table(t)]
+        on_table = [t for t in self.tracks.values() if self._on_table(t) and now - t.last <= CLEAR_SEEN_SECONDS]
         if self.waiting_for_round:
             # Cards that were already out when we started. Once every one of them has
             # been swept away, the next card is the start of a new round.
@@ -590,6 +638,7 @@ class TableEngine:
                 codes = [t.code for t in group]
                 hands.append({
                     "cards": codes,
+                    "ids": [t.cid for t in group],
                     "isBust": hand_total(codes) > 21 if codes else False,
                     "isSplit": split,
                     # a sideways card: the hand doubled down, took exactly one card and is finished
@@ -612,11 +661,15 @@ class TableEngine:
         up = [t for t in dealer_tracks if not t.face_down]
         hole_hidden = any(t.face_down for t in dealer_tracks)
         dcards = [t.code for t in up]
-        if hole_hidden and dcards:
+        dids = [t.cid for t in up]
+        hole = next((t for t in dealer_tracks if t.face_down), None)
+        if hole is not None and dcards:
             dcards = dcards[:1] + ["??"] + dcards[1:]
+            dids = dids[:1] + [hole.cid] + dids[1:]
         dconf = min((t.mean_conf for t in up), default=1.0)
         dealer = {
             "cards": dcards,
+            "ids": dids,
             "holeCardKnown": len(up) >= 2 and not hole_hidden,
             "confidence": "high" if dconf >= 0.8 else "medium" if dconf >= 0.6 else "low",
             "detection": round(dconf, 3),
@@ -625,7 +678,13 @@ class TableEngine:
         for p in players:
             for h in p["hands"]:
                 h.pop("_last")
-        history = [{k: v for k, v in e.items() if not k.startswith("_")} for e in self.history]
+        history, seen_hands = [], set()
+        for e in self.history:
+            item = {k: v for k, v in e.items() if not k.startswith("_")}
+            if "hand" in e:
+                item["handStart"] = e["hand"] not in seen_hands
+                seen_hands.add(e["hand"])
+            history.append(item)
         return {
             "type": "state",
             "occupancy": {str(p["seat"]): p["occupied"] for p in players},
@@ -640,7 +699,6 @@ class TableEngine:
             },
             "shoeStatus": self.shoe_status,
             "roundActive": self.round_active,
-            "coins": sorted(self.coins_present),
             "waitingForRound": self.waiting_for_round,
         }
 
@@ -654,8 +712,13 @@ class TableEngine:
         """
         if not self.round_active or not dealer["cards"] or dealer["holeCardKnown"]:
             return
-        active = [p for p in players if p["occupied"] and any(h["cards"] for h in p["hands"])]
-        if not active or any(sum(len(h["cards"]) for h in p["hands"]) < 2 for p in active):
+        # the opening deal is over once every dealt seat has two cards, or the dealer has two
+        # (up + hole: the dealer takes the last card of the opening deal)
+        if not (self.deal_resolved or len(dealer["cards"]) >= 2):
+            return
+        # a seat showing a single stray card (a misread) doesn't hold up everyone else
+        active = [p for p in players if p["occupied"] and sum(len(h["cards"]) for h in p["hands"]) >= 2]
+        if not active:
             return
         order = [(p, h) for p in active for h in p["hands"]]
 

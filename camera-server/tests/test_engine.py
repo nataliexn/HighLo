@@ -157,13 +157,11 @@ class EngineTests(unittest.TestCase):
         self.deal([4, 5], t)                              # seat 2 is not dealt this time
         self.assertEqual(self.occupied(), [4, 5])
 
-    def test_seat_with_a_card_is_selectable_before_the_first_pass_is_complete(self):
+    def test_seat_with_a_card_is_selectable_before_the_deal_is_complete(self):
         t = self.deal([2], self.warm())
         t = run(self.e, [], t, 6)
-        t = run(self.e, [det("9H", *SEAT[5])], t, 3)        # seat 5's first card, the dealer hasn't taken one yet
-        self.assertEqual(self.occupied(), [2, 5])            # seat 2 isn't dropped before the first pass is done
-        run(self.e, [det("6S", 0.46, 0.19), det("9H", *SEAT[5])], t, 3)   # the dealer's card ends the first pass
-        self.assertEqual(self.occupied(), [5])               # seat 2 wasn't dealt in: vacant
+        run(self.e, [det("6S", 0.46, 0.19), det("9H", *SEAT[5])], t, 4)   # only part of a deal is out
+        self.assertEqual(self.occupied(), [2, 5])    # seat 5 has a card; seat 2 isn't dropped until the deal completes
 
     def test_first_round_seats_show_from_the_first_card(self):
         run(self.e, [det("6S", 0.46, 0.19), det("9H", *SEAT[3]), det("4D", *SEAT[6])], self.warm(), 3)
@@ -258,53 +256,88 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(s["players"][1]["confidence"], "medium")
         self.assertAlmostEqual(s["dealer"]["detection"], 0.95, places=2)
 
-    # ---- coins / chips in the bet spots (seating) ---------------------------------
-    def coins(self, seats, t, seconds, dets=()):
-        n = int(seconds * 10)
-        for i in range(n):
-            self.e.update(list(dets), t + i / 10, coins=set(seats))
-        return t + seconds
+    # ---- reliable counting --------------------------------------------------------
+    def table(self, extra=()):
+        return [det("6S", 0.46, 0.19), det("back", 0.57, 0.19),
+                det("9H", *SEAT[2]), det("5C", SEAT[2][0] + 0.04, SEAT[2][1] + 0.05), *extra]
 
-    def test_coin_between_rounds_opens_the_seat(self):
-        t = self.coins({4}, self.warm(), 0.5)
-        self.assertEqual(self.occupied(), [])                # a moment isn't enough (a hand passing by)
-        self.coins({4}, t, 1.0)
-        self.assertEqual(self.occupied(), [4])
-        self.assertTrue(self.e.state()["seatsKnown"])
+    def cards_counted(self):
+        return [e["card"] for e in self.e.state()["countHistory"] if "card" in e]
 
-    def test_taking_the_coin_away_does_not_close_the_seat(self):
-        t = self.coins({4}, self.warm(), 2)
-        self.coins(set(), t, 10)                             # unsure what to bet
-        self.assertEqual(self.occupied(), [4])
+    def test_card_seen_briefly_is_shown_but_not_counted(self):
+        t = run(self.e, self.table(), self.warm(), 3)
+        x, y = SEAT[4]
+        t = run(self.e, self.table([det("KD", x, y)]), t, 1.0)        # a misread for one second
+        self.assertNotIn("KD", self.cards_counted())
+        run(self.e, self.table(), t, 6)
+        self.assertNotIn("KD", self.cards_counted())
 
-    def test_seat_with_a_coin_but_no_card_is_vacant_after_the_first_pass(self):
-        t = self.coins({2, 4}, self.warm(), 2)
-        self.assertEqual(self.occupied(), [2, 4])
-        dealt = [det("9H", *SEAT[2]), det("6S", 0.46, 0.19)]  # seat 2 and the dealer: seat 4 skipped
-        self.coins({2, 4}, t, 3, dealt)
-        self.assertEqual(self.occupied(), [2])
+    def test_counted_misread_that_vanishes_is_taken_back_out(self):
+        t = run(self.e, self.table(), self.warm(), 3)
+        x, y = SEAT[4]
+        t = run(self.e, self.table([det("KD", x, y)]), t, 2.5)        # long enough to be counted ...
+        self.assertIn("KD", self.cards_counted())
+        run(self.e, self.table(), t, 8)                               # ... then gone, never seen again
+        self.assertNotIn("KD", self.cards_counted())
+        self.assertEqual(sorted(self.cards_counted()), ["5C", "6S", "9H"])
 
-    def test_cards_without_a_coin_still_open_the_seat(self):
-        dealt = [det("9H", *SEAT[6]), det("6S", 0.46, 0.19)]
-        self.coins(set(), self.warm(), 3, dealt)
-        self.assertEqual(self.occupied(), [6])
+    def test_relabelled_card_replaces_its_entry(self):
+        t = self.warm()
+        x, y = SEAT[3]
+        for i in range(30):                                           # read as 3H at first ...
+            self.e.update(self.table([det("3H", x, y)]), t); t += 0.1
+        for i in range(40):                                           # ... then settles as 8H
+            self.e.update(self.table([det("8H", x, y)]), t); t += 0.1
+        seat3 = [e["card"] for e in self.e.state()["countHistory"] if e.get("seat") == 3]
+        self.assertEqual(seat3, ["8H"])
 
-    def test_coin_put_down_during_a_round_counts_from_the_next_round(self):
-        dealt = [det("9H", *SEAT[2]), det("5C", SEAT[2][0] + 0.04, SEAT[2][1] + 0.05),
-                 det("6S", 0.46, 0.19), det("back", 0.57, 0.19)]
-        t = self.coins(set(), self.warm(), 3, dealt)
-        t = self.coins({5}, t, 4, dealt)                     # seat 5's coin arrives mid-round
-        self.assertEqual(self.occupied(), [2])               # not this round
-        t = self.coins({5}, t, 6)                            # table swept, round over
+    def test_card_covered_for_a_while_is_not_counted_twice(self):
+        x, y = SEAT[3]
+        t = run(self.e, self.table([det("7H", x, y)]), self.warm(), 3)
+        t = run(self.e, self.table(), t, 3)                           # a hand covers it for 3 s
+        run(self.e, self.table([det("7D", x, y)]), t, 3)              # back, read as 7D this time
+        seat3 = [e["card"] for e in self.e.state()["countHistory"] if e.get("seat") == 3]
+        self.assertEqual(seat3, ["7D"])
+
+    def test_bust_hand_taken_away_mid_round_stays_counted(self):
+        x, y = SEAT[4]
+        bust = [det("10S", x, y), det("6D", x + 0.03, y - 0.06), det("KC", x + 0.05, y - 0.11)]
+        t = run(self.e, self.table(bust), self.warm(), 6)
+        run(self.e, self.table(), t, 8)                               # the dealer takes the bust cards
+        self.assertTrue({"10S", "6D", "KC"} <= set(self.cards_counted()))
+
+    def test_hole_card_turns_over_quickly(self):
+        up, hole = det("6S", 0.46, 0.19), det("back", 0.57, 0.19)
+        hand = [det("10C", *SEAT[1]), det("8D", SEAT[1][0] + 0.03, SEAT[1][1] - 0.06)]
+        t = run(self.e, [up, hole, *hand], self.warm(), 6)            # face down a long time
+        run(self.e, [up, det("QH", 0.57, 0.19), *hand], t, 0.4)       # turned over: 4 frames
+        s = self.e.state()
+        self.assertTrue(s["dealer"]["holeCardKnown"])
+        self.assertNotIn("??", s["dealer"]["cards"])
+
+    def test_one_card_dealer_has_no_hidden_card(self):
+        run(self.e, [det("6S", 0.46, 0.19), det("9H", *SEAT[2])], self.warm(), 3)
+        self.assertEqual(self.e.state()["dealer"]["cards"], ["6S"])
+
+    def test_stray_single_card_does_not_stall_the_turn(self):
+        x, y = SEAT[4]
+        run(self.e, self.table([det("KD", x, y)]), self.warm(), 4)    # seat 4 shows one stray card
+        turns = [p["seat"] for p in self.e.state()["players"] if p["isTurn"]]
+        self.assertEqual(turns, [2])
+
+    def test_cards_carry_stable_ids(self):
+        run(self.e, self.table(), self.warm(), 4)
+        s = self.e.state()
+        hand = s["players"][1]["hands"][0]
+        self.assertEqual(len(hand["ids"]), len(hand["cards"]))
+        self.assertEqual(len(s["dealer"]["ids"]), len(s["dealer"]["cards"]))
+        counted = {e["id"]: e["card"] for e in s["countHistory"] if "id" in e}
+        self.assertEqual([counted[i] for i in hand["ids"]], hand["cards"])
+
+    def test_cleared_table_ends_the_round_promptly(self):
+        t = run(self.e, self.table(), self.warm(), 4)
+        run(self.e, [], t, 3.5)
         self.assertFalse(self.e.state()["roundActive"])
-        self.assertEqual(self.occupied(), [2, 5])
-
-    def test_coins_ignored_while_waiting_for_a_round_joined_midway(self):
-        out = [det("QH", *DEALER), det("QD", *SEAT[2])]
-        t = self.coins({3}, 0, 6, out)                       # camera starts mid-round
-        self.assertEqual(self.occupied(), [])
-        self.coins({3}, t, 4)                                # swept: now it counts
-        self.assertEqual(self.occupied(), [3])
 
     def test_hand_total(self):
         self.assertEqual(hand_total(["AS", "KH"]), 21)

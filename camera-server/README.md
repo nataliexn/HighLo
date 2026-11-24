@@ -146,8 +146,18 @@ board moves. Without `calibration.json` the server still relays video and card b
 With a model **and** a calibration the server turns card boxes into table state and sends it to HighLo
 (`{"type":"state", ...}`: players, dealer, count history, shoe stats, mid-shoe flag):
 
-- Each physical card is tracked, confirmed after about half a second of steady detection, and counted **once**
-  however long it stays on the table. A flickering misread is outvoted by the frames around it.
+- Each physical card is tracked and shown after about half a second of steady detection. It goes into the running
+  count only once its label has **held for 1.5 seconds** (`COUNT_SETTLE_SECONDS`), and is counted **once** however
+  long it stays on the table. A flickering misread is outvoted by the frames around it.
+- **The count matches the cards on the table.** If the model changes its mind about a card, the entry is replaced,
+  not added. A card that disappears and is seen again in the same spot within `REPLACE_SECONDS` (4) (covered by a
+  hand, or relabelled) takes over its old entry. A counted card that vanishes after less than `FLEETING_SECONDS` (4)
+  on the table, and isn't seen again, was a misread and is taken back out. Real cards taken away (a bust hand, the
+  sweep) stay counted. Two boxes on one card (same rank, one mostly inside the other) count as one card.
+- The dealer's hole card shows as hidden only while a face-down card is actually seen, and turns face up after two
+  face-up sightings.
+- Every card has a stable id (`ids` next to `cards`, and `id` in the count history) that survives relabelling, so a
+  correction made in HighLo stays on that card.
 - Cards are sorted into the dealer and seats 1-6 by their position. The dealer's face-down card is shown face down and
   only counted when it is turned over.
 - A round ends when the table has been cleared for a couple of seconds.
@@ -156,18 +166,12 @@ With a model **and** a calibration the server turns card boxes into table state 
 
 ### Seats and joining mid-round
 
-- **Seats (coins and cards).** A player claims a seat by putting a coin or chip on the felt just below the seat's
-  white box (the "bet spot", drawn in `zones_preview.jpg`). `coins.py` looks for something round and coin-sized in
-  each bet spot, about three times a second; no model is needed, and a round pattern on a card doesn't count.
-  - Between rounds (table cleared), a coin that stays about a second opens its seat. Taking it away doesn't close it
-    (the player may just be deciding what to bet).
-  - During a round coins are ignored. A coin put down after the deal opens the seat once the round is swept.
-  - A seat that is dealt a card is occupied, coin or not (playing for fun).
-  - **Vacant = not dealt in.** When the first pass of the deal is done (each player has one card and the dealer has
-    taken theirs, steady for a second), every seat without a card is vacant, coin or not. A seat that gets a card
-    later in the round is added back. HighLo uses this to take someone out of a seat that is no longer in play.
-- **Splits** are only looked for once the opening deal is complete (every dealt seat and the dealer have two
-  cards), and only once per seat.
+- **Seats** count as occupied as soon as they get their first card, so players can pick their seat straight away.
+  When the opening deal is complete (the dealer has two cards and every seat that has a card has two) the seats
+  are fixed and remembered, even while the table is swept, until the next opening deal. A seat dealt last round but
+  not this one is vacant. A seat that gets a card after that (one the deal check missed) is added. HighLo uses this
+  to take someone out of a seat that is no longer in play.
+- **Splits** are only looked for once the opening deal is complete (everyone has two cards), and only once per seat.
   When a seat's first two cards are a pair (any two ten-value cards count) and they sit side by side across the seat,
   more than `SPLIT_SEPARATION` card widths (0.7) apart, each on about half of the box, the seat has two hands. Cards
   stacked towards the dealer (a normal hit) don't count, only the sideways distance does. Each later card joins the

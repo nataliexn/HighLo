@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { CardCluster, handValue } from "./Card.jsx";
-import { useAppState } from "../state/AppStateContext.jsx";
+import { fixCard, useAppState } from "../state/AppStateContext.jsx";
 import CardCorrectionModal from "./CardCorrectionModal.jsx";
 import { RESULT_STYLE } from "../lib/outcome.js";
 
@@ -11,17 +11,19 @@ function PlayerSeat({ player, isSelf, compact, hideLabel, large }) {
   const [editing, setEditing] = useState(null); // { handIndex, cardIndex, code }
 
   const confidence = player.confidence || "low";
+  const idOf = (handIndex, cardIndex) => (player.hands[handIndex]?.ids || [])[cardIndex];
 
+  // This viewer's correction for the card wins over whatever the camera reads there now.
   function resolvedCard(handIndex, cardIndex, code) {
-    const key = `${player.seat}-${handIndex}-${cardIndex}`;
-    return localCorrections[key] || code;
+    return fixCard(localCorrections, player.seat, handIndex, cardIndex, code, idOf(handIndex, cardIndex));
   }
 
   function applyCorrection(pick) {
     if (!editing) return;
     const { handIndex, cardIndex, code } = editing;
+    const id = idOf(handIndex, cardIndex);
     if (pick === null) {
-      correctCard(player.seat, handIndex, cardIndex, "??");
+      correctCard(player.seat, handIndex, cardIndex, "??", id);
       return;
     }
     const current = resolvedCard(handIndex, cardIndex, code);
@@ -29,7 +31,7 @@ function PlayerSeat({ player, isSelf, compact, hideLabel, large }) {
     const currentSuit = current.slice(-1);
     const next =
       pick.type === "rank" ? `${pick.value}${currentSuit}` : `${currentRank}${pick.value}`;
-    correctCard(player.seat, handIndex, cardIndex, next);
+    correctCard(player.seat, handIndex, cardIndex, next, id);
   }
 
   const seatMinHeight = large ? 210 : compact ? 110 : 142;

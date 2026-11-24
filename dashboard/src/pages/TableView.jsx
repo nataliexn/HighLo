@@ -3,6 +3,7 @@ import { useAppState } from "../state/AppStateContext.jsx";
 import CameraFeed from "../components/CameraFeed.jsx";
 import ActivePlayers from "../components/ActivePlayers.jsx";
 import Dealer from "../components/Dealer.jsx";
+import TurnControls from "../components/TurnControls.jsx";
 
 export default function TableView() {
   const { midShoeJoin } = useAppState();
@@ -27,6 +28,7 @@ export default function TableView() {
       <div className="hlo-panel">
         <div className="hlo-panel__header">
           <h3 className="hlo-panel__title">All Seats</h3>
+          <TurnControls />
         </div>
         <div className="hlo-panel__body">
           <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>

@@ -174,71 +174,66 @@ function HandChartRow({ cards, dealerUpCode }) {
 /**
  * RoundResultCard
  * Shown in place of the recommendation once the dealer stands on 17+ or
- * busts. One result at a time, with Previous / Next player to step through
- * the table. A split hand is its own result. Starts on the viewer's own seat.
+ * busts, until the table is cleared. The viewer's own hand(s) first and
+ * large, then every other hand at the table as a short line. A split hand
+ * is its own result. Green: win, blue: push, red: loss or bust.
  */
+function resultDetail(r) {
+  if (r.result === "bust") return `Bust with ${r.player}`;
+  if (r.dealerBust) return `${r.player}, dealer busts with ${r.dealer}`;
+  return `${r.player} vs dealer ${r.dealer}`;
+}
+
 function RoundResultCard({ results, selectedSeat, mobile }) {
-  const start = Math.max(0, results.findIndex((r) => r.seat === selectedSeat));
-  const [index, setIndex] = useState(start);
-  const i = Math.min(index, results.length - 1);
-  const r = results[i];
-  const style = RESULT_STYLE[r.result];
-  const many = results.length > 1;
-  const detail =
-    r.result === "bust"
-      ? `Bust with ${r.player}`
-      : r.dealerBust
-      ? `${r.player} — dealer busts with ${r.dealer}`
-      : `${r.player} vs dealer ${r.dealer}`;
+  const mine = results.filter((r) => r.seat === selectedSeat);
+  const others = results.filter((r) => r.seat !== selectedSeat);
+  const handName = (r) => `Seat ${r.seat}${r.isSplit ? ` · hand ${r.handIndex + 1}` : ""}${r.isDoubled ? " · doubled" : ""}`;
 
   return (
     <div>
-      <div style={{ fontSize: "0.72rem", color: "var(--white-faint)", marginBottom: 8 }}>
-        Round over · Seat {r.seat}
-        {r.seat === selectedSeat ? " (you)" : ""}
-        {r.isSplit ? ` · Split hand ${r.handIndex + 1}` : ""}
-        {r.isDoubled ? " · Doubled" : ""}
-        {many ? ` · ${i + 1} of ${results.length}` : ""}
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
-        <div
-          className={mobile ? "hlo-action-box--fixed" : ""}
-          style={{
-            display: "inline-block",
-            background: style.color,
-            color: "var(--white)",
-            fontFamily: "var(--font-display)",
-            fontSize: mobile ? "2.1rem" : "2.4rem",
-            letterSpacing: "0.04em",
-            padding: mobile ? "12px 10px" : "10px 30px",
-            borderRadius: "var(--radius-md)",
-            boxShadow: "0 4px 14px rgba(0,0,0,0.35)",
-          }}
-        >
-          {style.label}
-        </div>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: "1.3rem" }}>{detail}</div>
-      </div>
-      {many && (
-        <div style={{ display: "flex", gap: 10 }}>
-          <button
-            type="button"
-            className="hlo-btn hlo-btn--ghost"
-            style={{ flex: 1 }}
-            disabled={i === 0}
-            onClick={() => setIndex(i - 1)}
-          >
-            ← Previous player
-          </button>
-          <button
-            type="button"
-            className="hlo-btn hlo-btn--ghost"
-            style={{ flex: 1 }}
-            disabled={i === results.length - 1}
-            onClick={() => setIndex(i + 1)}
-          >
-            Next player →
-          </button>
+      <div style={{ fontSize: "0.72rem", color: "var(--white-faint)", marginBottom: 8 }}>Round over</div>
+      {mine.map((r) => {
+        const style = RESULT_STYLE[r.result];
+        return (
+          <div key={`${r.seat}-${r.handIndex}`} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+            <div
+              className={mobile ? "hlo-action-box--fixed" : ""}
+              style={{
+                display: "inline-block",
+                background: style.color,
+                color: "var(--white)",
+                fontFamily: "var(--font-display)",
+                fontSize: mobile ? "2.1rem" : "2.4rem",
+                letterSpacing: "0.04em",
+                padding: mobile ? "12px 10px" : "10px 30px",
+                borderRadius: "var(--radius-md)",
+                boxShadow: "0 4px 14px rgba(0,0,0,0.35)",
+              }}
+            >
+              {style.label}
+            </div>
+            <div>
+              <div style={{ fontSize: "0.72rem", color: "var(--white-faint)" }}>{handName(r)} (you)</div>
+              <div style={{ fontFamily: "var(--font-display)", fontSize: "1.3rem" }}>{resultDetail(r)}</div>
+            </div>
+          </div>
+        );
+      })}
+      {others.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: mine.length ? 4 : 0 }}>
+          {others.map((r) => {
+            const style = RESULT_STYLE[r.result];
+            return (
+              <div key={`${r.seat}-${r.handIndex}`} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: "0.8rem" }}>
+                <b style={{ color: style.color, fontFamily: "var(--font-display)", fontSize: "1rem", minWidth: 92, letterSpacing: "0.04em" }}>
+                  {style.label}
+                </b>
+                <span style={{ color: "var(--white-dim)" }}>
+                  {handName(r)}: {resultDetail(r)}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -294,7 +289,9 @@ export default function RecommendationPanel({ mobile = false, fillHeight = false
   // everything in the discard pile, so only the chart is used.
   const countReliable = !midShoeJoin.isMidShoeJoin;
   const rec = activeHand
-    ? recommend(activeHand.cards, dealerUpCard, countStats.trueCount, countReliable)
+    ? recommend(activeHand.cards, dealerUpCard, countStats.trueCount, countReliable, {
+        afterSplit: displayedPlayer.hands.length > 1,
+      })
     : null;
   const action = rec ? rec.action : recommendation.action;
 
@@ -373,7 +370,6 @@ export default function RecommendationPanel({ mobile = false, fillHeight = false
 
         {roundResults && roundResults.length > 0 ? (
           <RoundResultCard
-            key={roundResults.map((r) => `${r.seat}.${r.handIndex}`).join(",")}
             results={roundResults}
             selectedSeat={selectedSeat}
             mobile={mobile}

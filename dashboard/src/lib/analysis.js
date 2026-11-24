@@ -52,7 +52,7 @@ function pairAsTotal(cards, dealerUp) {
  * Returns null when the decision can't be graded fairly.
  */
 export function expectedMove(cards, dealerUp, trueCount, countReliable, { canSplit }) {
-  const rec = recommend(cards, dealerUp, trueCount, countReliable);
+  const rec = recommend(cards, dealerUp, trueCount, countReliable, { afterSplit: !canSplit });
   let action = rec.action;
   if (action === "SURRENDER") action = "HIT";
   if (action === "DOUBLE" && cards.length > 2) {

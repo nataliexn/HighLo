@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import Card, { handValue } from "./Card.jsx";
-import { useAppState } from "../state/AppStateContext.jsx";
+import { fixCard, useAppState } from "../state/AppStateContext.jsx";
 import CardCorrectionModal from "./CardCorrectionModal.jsx";
 
 const CONFIDENCE_LABEL = { high: "High", medium: "Medium", low: "Low" };
@@ -18,39 +18,41 @@ export default function Dealer({ compact = false }) {
   const { dealer, localCorrections, correctCard } = useAppState();
   const [editing, setEditing] = useState(null); // { cardIndex, code }
   const confidence = dealer.confidence || "high";
+  const ids = dealer.ids || [];
 
+  // This viewer's correction for the card wins over whatever the camera reads there now.
   function resolvedCard(cardIndex, code) {
-    const key = `dealer-0-${cardIndex}`;
-    return localCorrections[key] || code;
+    return fixCard(localCorrections, "dealer", 0, cardIndex, code, ids[cardIndex]);
   }
 
   function applyCorrection(pick) {
     if (!editing) return;
     const { cardIndex, code } = editing;
     if (pick === null) {
-      correctCard("dealer", 0, cardIndex, "??");
+      correctCard("dealer", 0, cardIndex, "??", ids[cardIndex]);
       return;
     }
     const current = resolvedCard(cardIndex, code);
     const currentRank = current.slice(0, -1) === "10" ? "10" : current.slice(0, -1);
     const currentSuit = current.slice(-1);
     const next = pick.type === "rank" ? `${pick.value}${currentSuit}` : `${currentRank}${pick.value}`;
-    correctCard("dealer", 0, cardIndex, next);
+    correctCard("dealer", 0, cardIndex, next, ids[cardIndex]);
   }
 
-  // cards[0] is the up card, cards[1] the hole card ("??" while face down),
-  // and anything after that is what the dealer drew.
-  const [rawUp, rawHole] = dealer.cards;
-  const drawn = dealer.cards.slice(2);
+  // cards[0] is the up card. cards[1] is the hole card: "??" while it lies face down
+  // (only when the camera actually sees a face-down card), its value once turned over.
+  // Anything after that is what the dealer drew. A dealer with one card shows one card.
   const noCards = dealer.cards.length === 0;
+  const [rawUp, rawHole] = dealer.cards;
+  const hasHole = dealer.cards.length >= 2;
+  const holeHidden = rawHole === "??";
+  const drawn = dealer.cards.slice(2);
   const upCard = resolvedCard(0, rawUp);
-  const holeCard = resolvedCard(1, rawHole);
+  const holeCard = hasHole && !holeHidden ? resolvedCard(1, rawHole) : null;
   const drawnCards = drawn.map((code, i) => resolvedCard(i + 2, code));
   const visibleTotal = noCards
     ? 0
-    : dealer.holeCardKnown
-    ? handValue([upCard, holeCard, ...drawnCards].filter((c) => c && c !== "??"))
-    : handValue([upCard]);
+    : handValue([upCard, holeCard, ...drawnCards].filter((c) => c && c !== "??"));
 
   return (
     <div
@@ -85,12 +87,12 @@ export default function Dealer({ compact = false }) {
           {/* The face-down card sits on the LEFT, the up card on the right,
               the way the dealer lays them out at a real table. */}
           <div className="hlo-card-row">
-            <Card
-              code={holeCard}
-              size={compact ? "sm" : "md"}
-              faceDown={!dealer.holeCardKnown}
-              onClick={dealer.holeCardKnown ? () => setEditing({ cardIndex: 1, code: rawHole }) : undefined}
-            />
+            {hasHole &&
+              (holeHidden ? (
+                <Card code="??" size={compact ? "sm" : "md"} faceDown />
+              ) : (
+                <Card code={holeCard} size={compact ? "sm" : "md"} onClick={() => setEditing({ cardIndex: 1, code: rawHole })} />
+              ))}
             <Card
               code={upCard}
               size={compact ? "sm" : "md"}
@@ -108,7 +110,7 @@ export default function Dealer({ compact = false }) {
           </div>
           <span style={{ fontFamily: "var(--font-display)", fontSize: compact ? "1.2rem" : "1.5rem" }}>
             {visibleTotal}
-            {!dealer.holeCardKnown && (
+            {holeHidden && (
               <span style={{ fontSize: "0.6rem", color: "var(--white-faint)", fontFamily: "var(--font-body)", marginLeft: 4 }}>
                 showing
               </span>

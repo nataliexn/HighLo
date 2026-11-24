@@ -16,15 +16,12 @@ log = logging.getLogger("highlo.hub")
 STALE_FRAME_SECONDS = 3.0      # no frames for this long => camera counts as closed
 HEARTBEAT_SECONDS = 2.0
 SEND_TIMEOUT_SECONDS = 1.0     # a stuck viewer must not stall everyone else
-COIN_CHECK_SECONDS = 0.3       # look for coins in the bet spots about three times a second
 
 
 class Hub:
-    def __init__(self, detector, max_frame_bytes: int, clock=time.monotonic, engine=None, coins=None):
+    def __init__(self, detector, max_frame_bytes: int, clock=time.monotonic, engine=None):
         self.detector = detector
         self.engine = engine            # TableEngine, or None without a calibration
-        self.coins = coins              # CoinSpotter (seating), or None without a calibration
-        self._last_coin_check = 0.0
         self.last_state: dict | None = engine.state() if engine is not None else None
         self.max_frame_bytes = max_frame_bytes
         self._clock = clock
@@ -196,21 +193,13 @@ class Hub:
                 log.exception("Detection failed on frame %s", seq)
                 continue
             await self.broadcast({"type": "detections", "seq": seq, "boxes": boxes})
-            coins = None
-            if self.coins is not None and self._clock() - self._last_coin_check >= COIN_CHECK_SECONDS:
-                self._last_coin_check = self._clock()
-                card_boxes = [b["box"] for b in boxes if b.get("code") or b.get("label") == "back"]
-                try:
-                    coins = await asyncio.to_thread(self.coins.find, image, card_boxes)
-                except Exception:
-                    log.exception("Coin check failed on frame %s", seq)
-            await self.update_table(boxes, coins)
+            await self.update_table(boxes)
 
-    async def update_table(self, boxes: list[dict], coins: set[int] | None = None) -> None:
+    async def update_table(self, boxes: list[dict]) -> None:
         if self.engine is None:
             return
         try:
-            changed = self.engine.update(boxes, self._clock(), coins)
+            changed = self.engine.update(boxes, self._clock())
             if changed or self.last_state is None:
                 self.last_state = self.engine.state()
                 await self.broadcast(self.last_state)

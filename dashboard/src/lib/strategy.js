@@ -193,7 +193,20 @@ export const DEVIATIONS = [
  *                      missing everything already in the discard pile)
  * @returns { action, chartAction, basis: "chart" | "count", note }
  */
-export function recommend(cards, dealerUp, trueCount, countReliable) {
+export function recommend(cards, dealerUp, trueCount, countReliable, { afterSplit = false } = {}) {
+  const pick = rawRecommend(cards, dealerUp, trueCount, countReliable);
+  // Surrender and doubling are only allowed on the first two cards, and not after a split
+  // (the chart and the count plays don't know how many cards the hand has).
+  const firstTwo = cards.length === 2 && !afterSplit;
+  const fix = (action) => {
+    if (action === "SURRENDER" && !firstTwo) return "HIT";
+    if (action === "DOUBLE" && cards.length > 2) return isSoft(cards) && handTotal(cards) === 18 ? "STAND" : "HIT";
+    return action;
+  };
+  return { ...pick, action: fix(pick.action), chartAction: fix(pick.chartAction) };
+}
+
+function rawRecommend(cards, dealerUp, trueCount, countReliable) {
   const chartAction = basicStrategyAction(cards, dealerUp);
   if (!countReliable) {
     return { action: chartAction, chartAction, basis: "chart", note: null };

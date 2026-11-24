@@ -6,6 +6,7 @@ import ActivePlayers from "../components/ActivePlayers.jsx";
 import Dealer from "../components/Dealer.jsx";
 import RecommendationPanel from "../components/RecommendationPanel.jsx";
 import CountHistory from "../components/CountHistory.jsx";
+import TurnControls from "../components/TurnControls.jsx";
 
 const TOP_ROW_HEIGHT = 460;
 
@@ -47,6 +48,7 @@ export default function MasterView() {
       <div className="hlo-panel" style={{ marginTop: 18 }}>
         <div className="hlo-panel__header">
           <h3 className="hlo-panel__title">Active Players</h3>
+          <TurnControls />
         </div>
         <div className="hlo-panel__body">
           <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
