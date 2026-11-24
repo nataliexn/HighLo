@@ -569,6 +569,8 @@ class TableEngine:
                 "hands": hands,
                 "isTurn": False,
                 "confidence": "high" if conf >= 0.8 else "medium" if conf >= 0.6 else "low",
+                # the model's own score for the least certain card in the seat (0-1)
+                "detection": round(conf, 3),
                 "lastAction": None,
             })
         dealer_tracks = self._cards_in("dealer") if self.tracking else []
@@ -577,10 +579,12 @@ class TableEngine:
         dcards = [t.code for t in up]
         if hole_hidden and dcards:
             dcards = dcards[:1] + ["??"] + dcards[1:]
+        dconf = min((t.mean_conf for t in up), default=1.0)
         dealer = {
             "cards": dcards,
             "holeCardKnown": len(up) >= 2 and not hole_hidden,
-            "confidence": "high",
+            "confidence": "high" if dconf >= 0.8 else "medium" if dconf >= 0.6 else "low",
+            "detection": round(dconf, 3),
         }
         self._turn(players, dealer)
         for p in players:

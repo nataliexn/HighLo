@@ -6,6 +6,12 @@ import StrategyChartButton from "./StrategyChart.jsx";
 import { insuranceAdvice } from "../lib/count.js";
 import { parseCard } from "./Card.jsx";
 import { RESULT_STYLE } from "../lib/outcome.js";
+import {
+  dealerBustProbability,
+  detectionConfidence,
+  overallConfidence as blendConfidence,
+  recommendationConfidence,
+} from "../lib/confidence.js";
 
 const ACTION_COLOR = {
   HIT: "var(--red-bright)",
@@ -291,21 +297,19 @@ export default function RecommendationPanel({ mobile = false, fillHeight = false
     ? recommend(activeHand.cards, dealerUpCard, countStats.trueCount, countReliable)
     : null;
   const action = rec ? rec.action : recommendation.action;
-  let adjustedConfidence = recommendation.recommendationConfidence;
-  if (rec) {
-    adjustedConfidence = rec.basis === "chart"
-      ? Math.min(0.99, recommendation.recommendationConfidence + 0.08)
-      : Math.max(0.4, recommendation.recommendationConfidence - 0.05);
-  }
 
-  // Overall confidence blends how sure the vision model is about the
-  // cards it read with how strongly the (strategy-checked) move is
-  // favored. Card detection carries real weight here: a shaky read
-  // undermines everything downstream of it.
-  const overallConfidence = activeHand
-    ? recommendation.cardDetectionConfidence * 0.4 + adjustedConfidence * 0.6
-    : null;
-  const detectionIsLow = recommendation.cardDetectionConfidence < 0.7;
+  // All worked out from this hand (lib/confidence.js): the model's score for
+  // the cards in play, how clear the call is, and the dealer's bust chance.
+  // Overall confidence blends the first two; card detection carries real
+  // weight, because a shaky read undermines everything after it.
+  const clarity = activeHand
+    ? recommendationConfidence(activeHand.cards, dealerUpCard, countStats.trueCount, countReliable)
+    : { confidence: null, closeCall: false, note: null };
+  const detection = displayedPlayer ? detectionConfidence(displayedPlayer, dealer) : null;
+  const overallConfidence = activeHand ? blendConfidence(detection, clarity.confidence) : null;
+  const detectionIsLow = detection != null && detection < 0.7;
+  const bust = dealerBustProbability(dealerUpCard, countStats.trueCount, countReliable);
+  const pctText = (v) => (v == null ? "—" : `${Math.round(v * 100)}%`);
 
   const dealerUpIsAce = parseCard(dealerUpCard).rank === "A";
   const insurance = dealerUpIsAce ? insuranceAdvice(countStats.trueCount) : null;
@@ -424,6 +428,7 @@ export default function RecommendationPanel({ mobile = false, fillHeight = false
                     }}
                   >
                     Overall confidence
+                    <InfoIcon text="40% card detection confidence + 60% recommendation strength." />
                   </div>
                   <div
                     style={{
@@ -454,6 +459,9 @@ export default function RecommendationPanel({ mobile = false, fillHeight = false
                 {rec && rec.basis === "count" && (
                   <p style={{ fontSize: "0.72rem", color: "var(--confidence-medium)", marginBottom: 12 }}>{rec.note}</p>
                 )}
+                {clarity.note && (
+                  <p style={{ fontSize: "0.72rem", color: "var(--white-dim)", marginTop: 0, marginBottom: 12 }}>{clarity.note}</p>
+                )}
 
                 <div
                   style={{
@@ -464,13 +472,18 @@ export default function RecommendationPanel({ mobile = false, fillHeight = false
                 >
                   <Metric
                     label="Card detection confidence"
-                    value={`${Math.round(recommendation.cardDetectionConfidence * 100)}%`}
-                    info="How certain the vision model is that the cards it read for this hand are correct."
+                    value={pctText(detection)}
+                    info="The vision model's own score for the least certain card that matters here: this hand's cards and the dealer's up card."
+                  />
+                  <Metric
+                    label="Recommendation strength"
+                    value={pctText(clarity.confidence)}
+                    info="How clear this play is. A hand where the other moves are worth almost as much, or where the count is close to changing the play, scores lower."
                   />
                   <Metric
                     label="Dealer bust probability"
-                    value={`${Math.round(recommendation.dealerBustProbability * 100)}%`}
-                    info="Estimated chance the dealer busts, based on their up card and the current count."
+                    value={pctText(bust)}
+                    info="How often the dealer busts from this up card (6 decks, stands on soft 17), nudged up or down by the true count. An estimate."
                   />
                   <Metric
                     label="Running count"

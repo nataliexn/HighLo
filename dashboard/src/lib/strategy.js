@@ -2,21 +2,21 @@ import { parseCard, rankValue } from "../components/Card.jsx";
 
 export const DEALER_COLUMNS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "A"];
 
-function dealerColLabel(code) {
+export function dealerColLabel(code) {
   const { rank } = parseCard(code);
   if (rank === "A") return "A";
   if (["K", "Q", "J"].includes(rank)) return "10";
   return rank;
 }
 
-function isPair(cards) {
+export function isPair(cards) {
   if (cards.length !== 2) return false;
   const [a, b] = cards.map((c) => parseCard(c).rank);
   const norm = (r) => (["K", "Q", "J"].includes(r) ? "10" : r);
   return norm(a) === norm(b);
 }
 
-function isSoft(cards) {
+export function isSoft(cards) {
   // Soft = contains an Ace that can still count as 11 without busting.
   const ranks = cards.map((c) => parseCard(c).rank);
   if (!ranks.includes("A")) return false;
@@ -29,7 +29,7 @@ function isSoft(cards) {
   return total <= 21;
 }
 
-function handTotal(cards) {
+export function handTotal(cards) {
   let total = 0;
   let aces = 0;
   cards.forEach((c) => {
@@ -168,7 +168,7 @@ export function fullStrategyChart() {
 // A subset of the well-known "Illustrious 18" index plays (6 decks, dealer
 // stands on 17). [hand-kind, total, dealer column, action, direction, index]:
 // "gte" = play `action` when true count >= index, "lt" = when true count < index.
-const DEVIATIONS = [
+export const DEVIATIONS = [
   ["hard", 16, "10", "STAND", "gte", 0],
   ["hard", 15, "10", "STAND", "gte", 4],
   ["hard", 16, "9", "STAND", "gte", 5],

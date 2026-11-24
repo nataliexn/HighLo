@@ -247,6 +247,15 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(after["players"][1]["hands"][0]["cards"], ["9H", "5C"])
         self.assertTrue(after["roundActive"])
 
+    def test_detection_scores_are_reported(self):
+        x, y = SEAT[2]
+        dets = [det("6S", 0.46, 0.19, conf=0.95), det("9H", x, y, conf=0.9), det("5C", x + 0.04, y + 0.05, conf=0.62)]
+        run(self.e, dets, self.warm(), 3)
+        s = self.e.state()
+        self.assertAlmostEqual(s["players"][1]["detection"], 0.62, places=2)    # the least certain card
+        self.assertEqual(s["players"][1]["confidence"], "medium")
+        self.assertAlmostEqual(s["dealer"]["detection"], 0.95, places=2)
+
     def test_hand_total(self):
         self.assertEqual(hand_total(["AS", "KH"]), 21)
         self.assertEqual(hand_total(["AS", "AH", "9C"]), 21)

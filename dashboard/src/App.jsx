@@ -6,6 +6,7 @@ import { useIsMobile } from "./hooks.js";
 import Nav from "./components/Nav.jsx";
 import MobileHeader from "./components/MobileHeader.jsx";
 import MobileTabBar from "./components/MobileTabBar.jsx";
+import DemoBanner from "./components/DemoBanner.jsx";
 
 import Login from "./pages/Login.jsx";
 import SeatSelection from "./pages/SeatSelection.jsx";
@@ -112,6 +113,7 @@ function DesktopLayout({ children }) {
   return (
     <>
       <Nav />
+      <DemoBanner />
       {children}
       <VacancyWatcher />
     </>
@@ -122,6 +124,7 @@ function MobileLayout({ children }) {
   return (
     <>
       <MobileHeader />
+      <DemoBanner compact />
       {children}
       <MobileTabBar />
       <VacancyWatcher />

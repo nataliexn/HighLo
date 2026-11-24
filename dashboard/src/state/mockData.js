@@ -24,13 +24,10 @@ export const emptyShoeStats = () => ({ handsSinceShuffle: 0, lastShuffleHand: 0 
 
 export const defaultMidShoeJoin = { isMidShoeJoin: false, countReliability: 1 };
 
-// Confidence numbers shown next to a recommendation (placeholder values until
-// the server reports real ones).
+// The move shown before any hand is in play. The confidence numbers next to a
+// recommendation are worked out per hand in lib/confidence.js.
 export const defaultRecommendation = {
   action: "HIT", // HIT | STAND | DOUBLE | SPLIT | SURRENDER
-  recommendationConfidence: 0.87,
-  cardDetectionConfidence: 0.94,
-  dealerBustProbability: 0.31,
 };
 
 // ---- Demo accounts ------------------------------------------------------
@@ -100,4 +97,60 @@ export const DEMO_ACCOUNTS = {
 export function analysisFor(username) {
   const key = (username || "").trim().toLowerCase();
   return DEMO_ACCOUNTS[key] ? { ...DEMO_ACCOUNTS[key] } : emptyAnalysis();
+}
+
+// ---- Sample table -------------------------------------------------------
+// Shown only while no camera is live, so someone visiting the site (or the
+// app between sessions) sees every part of the dashboard working instead of
+// empty seats. A banner says it is sample data (see DemoBanner). It is never
+// recorded into anyone's analysis.
+export function demoTable() {
+  const hand = (cards, extra = {}) => ({ cards, isBust: false, isSplit: false, isDoubled: false, isTurn: false, ...extra });
+  const players = [
+    // seat 1 doubled on 11 (the sideways card) and got a 9
+    { seat: 1, occupied: true, hands: [hand(["6D", "5S", "9H"], { isDoubled: true })], isTurn: false, confidence: "high", detection: 0.93, lastAction: "Double" },
+    // seat 2 split 8s: hand 1 drew to 21, hand 2 stands on 17
+    {
+      seat: 2,
+      occupied: true,
+      hands: [hand(["8H", "3C", "10D"], { isSplit: true }), hand(["8S", "9C"], { isSplit: true })],
+      isTurn: false,
+      confidence: "medium",
+      detection: 0.71,
+      lastAction: "Split",
+    },
+    // seat 3 is up: 11 against a dealer 6
+    { seat: 3, occupied: true, hands: [hand(["5C", "6S"], { isTurn: true })], isTurn: true, confidence: "high", detection: 0.91, lastAction: null },
+    { seat: 4, occupied: false, hands: [hand([])], isTurn: false, confidence: "high", lastAction: null },
+    { seat: 5, occupied: true, hands: [hand(["AH", "7C"])], isTurn: false, confidence: "high", detection: 0.88, lastAction: null },
+    { seat: 6, occupied: false, hands: [hand([])], isTurn: false, confidence: "high", lastAction: null },
+  ];
+  const dealer = { cards: ["6H", "??"], holeCardKnown: false, confidence: "high", detection: 0.96 };
+
+  // two earlier hands this shoe, then the one on the table
+  const history = [];
+  const add = (handNo, seat, handIndex, cardIndex, card) =>
+    history.push({
+      card,
+      value: ["2", "3", "4", "5", "6"].includes(card.slice(0, -1)) ? 1 : ["7", "8", "9"].includes(card.slice(0, -1)) ? 0 : -1,
+      hand: handNo,
+      handStart: !history.some((e) => e.hand === handNo),
+      seat,
+      handIndex,
+      cardIndex,
+    });
+  [
+    [1, "dealer", ["9S", "KD"]], [1, 2, ["4H", "QS", "7D"]], [1, 3, ["10C", "8C"]],
+    [2, "dealer", ["5D", "2H", "JC"]], [2, 1, ["AS", "KH"]], [2, 3, ["3D", "4S", "9D"]], [2, 5, ["6C", "2C", "QH"]],
+  ].forEach(([h, seat, cards]) => cards.forEach((c, i) => add(h, seat, 0, i, c)));
+  add(3, "dealer", 0, 0, "6H");
+  players.forEach((p) => p.hands.forEach((hd, hi) => hd.cards.forEach((c, ci) => add(3, p.seat, hi, ci, c))));
+
+  return {
+    occupancy: Object.fromEntries(players.map((p) => [p.seat, p.occupied])),
+    players,
+    dealer,
+    countHistory: history,
+    shoeStats: { handsSinceShuffle: 3, lastShuffleHand: 0 },
+  };
 }

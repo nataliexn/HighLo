@@ -102,7 +102,9 @@ export default function CameraFeed() {
             {link.holding ? "RECONNECTING…" : "NO CAMERA DETECTED"}
           </span>
           <span style={{ fontSize: "0.85rem", color: "var(--white-dim)" }}>
-            {link.holding ? "Keeping the last table for up to 15 seconds." : "The table is empty."}
+            {link.holding
+              ? "Keeping the last table for up to 15 seconds."
+              : "The seats, count and recommendation are sample data until a camera connects."}
           </span>
           {!link.holding && <span style={{ fontSize: "0.78rem" }}>{offlineHint}</span>}
         </div>

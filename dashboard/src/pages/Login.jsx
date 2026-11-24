@@ -31,6 +31,7 @@ function Field({ label, children }) {
 
 /** The charcoal sign-in form, shared by the computer and phone layouts. */
 function LoginForm({ mode, setMode, name, setName, onSubmit, onGuest }) {
+  const { isDemo } = useAppState();
   const [showPassword, setShowPassword] = useState(false);
   const signingUp = mode === "register";
   return (
@@ -108,6 +109,23 @@ function LoginForm({ mode, setMode, name, setName, onSubmit, onGuest }) {
           Guests get real-time recommendations and the running count only. No stats are saved and no playstyle report
           is generated.
         </p>
+        {isDemo && (
+          <p
+            style={{
+              fontSize: "0.78rem",
+              color: "var(--white-dim)",
+              margin: "14px 0 0",
+              lineHeight: 1.5,
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: "1px solid rgba(168,134,63,0.45)",
+              background: "rgba(168,134,63,0.1)",
+            }}
+          >
+            <b style={{ color: "var(--brass)" }}>No camera is live right now.</b> Sign in or continue as a guest to look
+            around a sample table.
+          </p>
+        )}
 
         <p style={{ margin: "30px 0 0", fontSize: "0.9rem", color: "var(--white-dim)", textAlign: "center" }}>
           {signingUp ? "Already have an account? " : "New to HighLo? "}

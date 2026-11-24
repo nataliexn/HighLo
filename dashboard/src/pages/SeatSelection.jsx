@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAppState } from "../state/AppStateContext.jsx";
+import DemoBanner from "../components/DemoBanner.jsx";
 
 function DisclaimerModal({ seat, spectate, onCancel, onConfirm }) {
   const [checked, setChecked] = useState(false);
@@ -67,7 +68,7 @@ function DisclaimerModal({ seat, spectate, onCancel, onConfirm }) {
 }
 
 export default function SeatSelection() {
-  const { occupancy, selectedSeat, setSelectedSeat, startSpectating, isGuest, username, live, seatsKnown } =
+  const { occupancy, selectedSeat, setSelectedSeat, startSpectating, isGuest, username, live, seatsKnown, isDemo } =
     useAppState();
   const navigate = useNavigate();
   const seats = Object.keys(occupancy).map(Number);
@@ -88,10 +89,12 @@ export default function SeatSelection() {
   }
 
   let hint = "Only seats the camera sees occupied can be selected.";
-  if (!live) hint = "No camera is connected, so no seat can be taken yet. You can spectate in the meantime.";
+  if (isDemo) hint = "This is the sample table: pick any occupied seat to look around.";
   else if (!seatsKnown) hint = "A seat opens up as soon as the dealer gives it a card. You can spectate until then.";
 
   return (
+    <>
+    <DemoBanner />
     <div
       style={{
         minHeight: "100%",
@@ -235,5 +238,6 @@ export default function SeatSelection() {
         />
       )}
     </div>
+    </>
   );
 }

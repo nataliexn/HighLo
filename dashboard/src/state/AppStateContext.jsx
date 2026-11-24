@@ -12,7 +12,16 @@ import {
   analysisFor,
   defaultRecommendation,
   defaultMidShoeJoin,
+  demoTable,
 } from "./mockData.js";
+import {
+  analyze,
+  finalize as finalizeRound,
+  isAnalysisAccount,
+  newTracker,
+  observe as observeRound,
+  setResults as setRoundTrackerResults,
+} from "../lib/analysis.js";
 
 const AppStateContext = createContext(null);
 // Camera-link data changes many times a second (detection boxes), so it
@@ -147,10 +156,23 @@ export function AppStateProvider({ children }) {
   const [extraHands, setExtraHands] = useState(() => loadLocal("extraHands", {}));
   useEffect(() => saveLocal("extraHands", extraHands), [extraHands]);
   const accountKey = username.trim().toLowerCase();
+  // The analysis accounts (dec5, dec11) build a real report from the hands they
+  // play (lib/analysis.js). Their rounds are kept per account in this browser.
+  const analysisAccount = isAuthenticated && isAnalysisAccount(accountKey);
+  const [analysisRecords, setAnalysisRecords] = useState(() => loadLocal("analysisRecords", {}));
+  useEffect(() => saveLocal("analysisRecords", analysisRecords), [analysisRecords]);
   const analysis = useMemo(() => {
+    if (analysisAccount) return analyze(analysisRecords[accountKey] || []);
     const base = isAuthenticated ? analysisFor(username) : emptyAnalysis();
     return { ...base, handsPlayed: base.handsPlayed + (extraHands[accountKey] || 0) };
-  }, [isAuthenticated, username, accountKey, extraHands]);
+  }, [isAuthenticated, username, accountKey, extraHands, analysisAccount, analysisRecords]);
+  function resetAnalysis() {
+    setAnalysisRecords((prev) => {
+      const next = { ...prev };
+      delete next[accountKey];
+      return next;
+    });
+  }
 
   // What each kind of session may do:
   //   logged in + seat      view analysis, analysis updates, can switch the recommendation view
@@ -235,17 +257,21 @@ export function AppStateProvider({ children }) {
   // hand gets its own. Uses this viewer's card corrections. The results stay
   // up after the table is swept and clear when the next round starts.
   const [roundResults, setRoundResults] = useState(null);
-  const liveResults = useMemo(() => {
+  const corrected = useMemo(() => {
     const fix = (seat, handIndex, cards) =>
       cards.map((c, i) => localCorrections[`${seat}-${handIndex}-${i}`] || c);
-    const fixedDealer = { ...dealer, cards: fix("dealer", 0, dealer.cards) };
-    if (!dealerFinished(fixedDealer)) return null;
-    const fixedPlayers = players.map((p) => ({
-      ...p,
-      hands: p.hands.map((h, hi) => ({ ...h, cards: fix(p.seat, hi, h.cards) })),
-    }));
-    return buildRoundResults(fixedPlayers, fixedDealer);
+    return {
+      dealer: { ...dealer, cards: fix("dealer", 0, dealer.cards) },
+      players: players.map((p) => ({
+        ...p,
+        hands: p.hands.map((h, hi) => ({ ...h, cards: fix(p.seat, hi, h.cards) })),
+      })),
+    };
   }, [players, dealer, localCorrections]);
+  const liveResults = useMemo(
+    () => (dealerFinished(corrected.dealer) ? buildRoundResults(corrected.players, corrected.dealer) : null),
+    [corrected]
+  );
   useEffect(() => {
     if (liveResults && liveResults.length) setRoundResults(liveResults);
     else if (dealer.cards.length > 0) setRoundResults(null); // dealer still drawing (or a misread was fixed)
@@ -346,18 +372,24 @@ export function AppStateProvider({ children }) {
   const sessionRef = useRef({});
   sessionRef.current = { selectedSeat, isAuthenticated, isSpectating, accountKey };
   const roundRef = useRef({ active: false, played: false });
+  const [roundActive, setRoundActive] = useState(false);
+  // No live camera: show the sample table (labelled by DemoBanner) instead of an
+  // empty one, so every part of the dashboard can be seen working.
+  const isDemo = !live;
 
   useEffect(() => {
     if (!live || !serverState) {
-      setOccupancy(emptyOccupancy());
-      setSeatsKnown(false);
-      setPlayers(emptyPlayers());
-      setDealer(emptyDealer());
-      setCountHistory([]);
-      setShoeStats(emptyShoeStats());
+      const demo = demoTable();
+      setOccupancy(live ? emptyOccupancy() : demo.occupancy);
+      setSeatsKnown(!live);
+      setPlayers(live ? emptyPlayers() : demo.players);
+      setDealer(live ? emptyDealer() : demo.dealer);
+      setCountHistory(live ? [] : demo.countHistory);
+      setShoeStats(live ? emptyShoeStats() : demo.shoeStats);
       setMidShoeJoin(defaultMidShoeJoin);
       setLocalCorrections({});
       setRoundResults(null);
+      setRoundActive(false);
       roundRef.current = { active: false, played: false };
       return;
     }
@@ -377,11 +409,15 @@ export function AppStateProvider({ children }) {
       }
       // A round the user sat through has ended: it counts towards their analysis
       // (only when logged in AND sitting, never for a spectator or a guest).
-      if (!event.roundActive && round.active && round.played && me.isAuthenticated && me.selectedSeat) {
+      if (
+        !event.roundActive && round.active && round.played && me.isAuthenticated && me.selectedSeat &&
+        !isAnalysisAccount(me.accountKey) // those count from their own records
+      ) {
         setExtraHands((prev) => ({ ...prev, [me.accountKey]: (prev[me.accountKey] || 0) + 1 }));
         round.played = false;
       }
       round.active = event.roundActive;
+      setRoundActive(event.roundActive);
     }
 
     if (event.occupancy) setOccupancy(event.occupancy);
@@ -393,6 +429,35 @@ export function AppStateProvider({ children }) {
     if (event.shoeStats) setShoeStats(event.shoeStats);
     if (event.midShoeJoin) setMidShoeJoin(event.midShoeJoin);
   }, [live, serverState]);
+
+  // ---- Recording hands for the analysis accounts ---------------------------
+  // Follows the user's own seat through each live round and saves the round
+  // (cards, every move, how it was graded, the result) when it ends. Only from
+  // a seat, only with a live camera, never from the sample table.
+  const trackerRef = useRef(null);
+  useEffect(() => {
+    const recording = live && analysisAccount && selectedSeat && !isSpectating;
+    if (!recording) {
+      trackerRef.current = null;
+      return;
+    }
+    if (roundActive) {
+      if (!trackerRef.current || trackerRef.current.seat !== selectedSeat) trackerRef.current = newTracker(selectedSeat);
+      const mine = corrected.players.find((p) => p.seat === selectedSeat);
+      observeRound(trackerRef.current, mine ? mine.hands : [], {
+        dealerUp: corrected.dealer.cards[0],
+        trueCount: countStats.trueCount,
+        countReliable: !midShoeJoin.isMidShoeJoin,
+      });
+      if (roundResults) setRoundTrackerResults(trackerRef.current, roundResults.filter((r) => r.seat === selectedSeat));
+    } else if (trackerRef.current) {
+      const record = finalizeRound(trackerRef.current);
+      trackerRef.current = null;
+      if (record) {
+        setAnalysisRecords((prev) => ({ ...prev, [accountKey]: [...(prev[accountKey] || []), record] }));
+      }
+    }
+  }, [live, analysisAccount, selectedSeat, isSpectating, roundActive, corrected, roundResults, countStats, midShoeJoin, accountKey]);
 
   function saveLinkSettings(next) {
     const clean = { serverAddress: next.serverAddress.trim(), token: next.token.trim() };
@@ -453,6 +518,7 @@ export function AppStateProvider({ children }) {
       canToggleRecommendationView,
       live,
       holding,
+      isDemo,
       seatsKnown,
       occupancy,
       players,
@@ -462,6 +528,8 @@ export function AppStateProvider({ children }) {
       countStats,
       shoeStats,
       analysis,
+      analysisAccount,
+      resetAnalysis,
       midShoeJoin,
       cameraConnected,
       isCountHistoryVisible,
@@ -483,6 +551,8 @@ export function AppStateProvider({ children }) {
       analysis,
       live,
       holding,
+      isDemo,
+      analysisAccount,
       seatsKnown,
       scopeChoice,
       occupancy,
