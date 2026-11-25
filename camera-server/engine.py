@@ -595,7 +595,9 @@ class TableEngine:
         if not self.tracking or not self.round_active:
             return
         if not self.deal_resolved:
-            dealer = [t for t in self.tracks.values() if t.zone == "dealer" and t.confirmed(t.last)]
+            # only a card lying still in the dealer's spot: cards dealt from the shoe slide
+            # through the dealer's area on their way to the seats
+            dealer = [t for t in self.tracks.values() if t.zone == "dealer" and t.confirmed(t.last) and t.at_rest()]
             if not dealer or not self.round_seats:
                 self.deal_ready_since = None
                 return

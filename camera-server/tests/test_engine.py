@@ -395,6 +395,22 @@ class EngineTests(unittest.TestCase):
         s = self.e.state()
         self.assertEqual(s["players"][1]["hands"][0]["cards"], ["5H", "QC"])
 
+    def test_card_sliding_through_the_dealer_area_does_not_lock_the_seats(self):
+        """The first pass: seats 2 and 3 dealt, then a card slides slowly from the shoe through
+        the dealer's area to seat 4. It isn't the dealer's first card, so seats 4 and 5 still open."""
+        dealt = [det("6D", *SEAT[2]), det("2D", *SEAT[3])]
+        t = run(self.e, dealt, self.warm(), 3)
+        x4, y4 = SEAT[4]
+        for i in range(16):                                    # slides 1.6 s through the dealer's area
+            x, y = 0.78 - 0.016 * i, 0.18 + 0.008 * i
+            self.e.update(dealt + [det("4D", x, y)], t); t += 0.1
+        t = run(self.e, dealt + [det("4D", x4, y4)], t, 2)
+        run(self.e, dealt + [det("4D", x4, y4), det("10D", *SEAT[5])], t, 3)
+        self.assertEqual(self.occupied(), [2, 3, 4, 5])
+        s = self.e.state()
+        self.assertEqual(s["players"][3]["hands"][0]["cards"], ["4D"])
+        self.assertEqual(s["dealer"]["cards"], [])
+
     def test_hand_total(self):
         self.assertEqual(hand_total(["AS", "KH"]), 21)
         self.assertEqual(hand_total(["AS", "AH", "9C"]), 21)
