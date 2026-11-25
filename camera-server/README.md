@@ -158,7 +158,9 @@ With a model **and** a calibration the server turns card boxes into table state 
   face-up sightings.
 - Every card has a stable id (`ids` next to `cards`, and `id` in the count history) that survives relabelling, so a
   correction made in HighLo stays on that card.
-- Cards are sorted into the dealer and seats 1-6 by their position. The dealer's face-down card is shown face down and
+- Cards are dealt from the shoe across other seats, so a card is placed **where it comes to rest**: it is shown,
+  counted and tied to a seat only after lying still for `REST_SECONDS` (0.6). A card resting on or against a seat's
+  cards joins that hand. Cards are sorted into the dealer and seats 1-6 by their position. The dealer's face-down card is shown face down and
   only counted when it is turned over.
 - A round ends when the table has been cleared for a couple of seconds.
 - "Whose turn" is a guess from the cards (everyone has two cards, then whoever just took a card). Real turns need

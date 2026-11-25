@@ -364,6 +364,37 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(s["players"][2]["hands"][0]["cards"], ["5H", "6C", "KD"])
         self.assertEqual(self.occupied(), [3])
 
+    def test_card_dealt_from_the_shoe_lands_in_the_right_seat(self):
+        """Dealt from the shoe (top right) across seats 1 and 2 into seat 3: it belongs to seat 3,
+        and seats 1 and 2 don't open just because it was seen passing over them."""
+        base = [det("6S", 0.46, 0.19)]
+        t = self.warm()
+        x0, y0 = 0.86, 0.2
+        x1, y1 = SEAT[3]
+        for i in range(9):                                     # 0.9 s in flight, seen every frame
+            f = (i + 1) / 9
+            self.e.update(base + [det("8C", x0 + (x1 - x0) * f, y0 + (y1 + 0.05 - y0) * f)], t)
+            t += 0.1
+        run(self.e, base + [det("8C", x1, y1 + 0.05)], t, 3)
+        s = self.e.state()
+        self.assertEqual(s["players"][2]["hands"][0]["cards"], ["8C"])
+        self.assertEqual(self.occupied(), [3])
+        self.assertEqual([e["seat"] for e in s["countHistory"] if e.get("card") == "8C"], [3])
+
+    def test_card_passing_over_another_hand_does_not_join_it(self):
+        x2, y2 = SEAT[2]
+        hand2 = [det("5H", x2, y2 + 0.08), det("QC", x2 + 0.02, y2)]
+        t = run(self.e, [det("6S", 0.46, 0.19), det("back", 0.57, 0.19), *hand2], self.warm(), 3)
+        x3, y3 = SEAT[3]
+        for i in range(8):                                     # slides over seat 2's cards into seat 3
+            f = (i + 1) / 8
+            self.e.update([det("6S", 0.46, 0.19), det("back", 0.57, 0.19), *hand2,
+                           det("8C", x2 + (x3 - x2) * f, y2 + (y3 + 0.05 - y2) * f)], t)
+            t += 0.1
+        run(self.e, [det("6S", 0.46, 0.19), det("back", 0.57, 0.19), *hand2, det("8C", x3, y3 + 0.05)], t, 3)
+        s = self.e.state()
+        self.assertEqual(s["players"][1]["hands"][0]["cards"], ["5H", "QC"])
+
     def test_hand_total(self):
         self.assertEqual(hand_total(["AS", "KH"]), 21)
         self.assertEqual(hand_total(["AS", "AH", "9C"]), 21)

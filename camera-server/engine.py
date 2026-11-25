@@ -41,6 +41,9 @@ REPLACE_SECONDS = 4.0       # a card seen again in the same spot within this lon
 FLEETING_SECONDS = 4.0      # a counted card that vanishes after being on the table less than this was a misread
 FLIP_HITS = 2               # face-up sightings that turn a face-down card over at once
 CLEAR_SEEN_SECONDS = 0.7    # a card not seen for this long no longer keeps the round going
+REST_SECONDS = 0.6          # a card must lie still this long before it is shown, counted or tied to a seat
+REST_MOVE = 0.25            # ... "still" = its centre stays within this many card widths
+UNLOCK_MOVE = 1.5           # a card pushed further than this many card widths gets its seat worked out again
 ROUND_END_SECONDS = 2.0     # table clear for this long => round over
 JOIN_DECISION_SECONDS = 3.0 # look at the discard pile this long after starting
 SHUFFLE_EMPTY_SECONDS = 4.0 # discard pile gone this long (between rounds) => shuffle
@@ -126,6 +129,11 @@ class Track:
     cid: str = ""                 # stable card id for HighLo (kept when a misread is replaced)
     label_since: float = 0.0      # when the current label became the leading one
     flip_hits: int = 0
+    # Cards are dealt from the shoe across other seats: a card's seat is decided where it
+    # comes to rest, not where it was first seen in flight.
+    anchor: tuple | None = None   # centre (px) where it has been lying still
+    rest_since: float = 0.0
+    zone_locked: bool = False
 
     def add(self, code: str, conf: float, box, now: float, zone: str, angle=None) -> None:
         if angle is not None and len(self.angles) < 30:
@@ -149,8 +157,8 @@ class Track:
         self.hits += 1
         self.box = box
         self.last = now
-        # a card stays in the seat it was dealt to; it only leaves for a pile (swept away)
-        if not self.zone.startswith("seat") or zone in ("discard", "shoe"):
+        # once at rest a card keeps its seat (or the dealer); it only leaves for a pile (swept away)
+        if not self.zone_locked or zone in ("discard", "shoe"):
             self.zone = zone
 
     @property
@@ -178,9 +186,12 @@ class Track:
     def face_down(self) -> bool:
         return self.code == "back"
 
+    def at_rest(self) -> bool:
+        return self.last - self.rest_since >= REST_SECONDS
+
     def settled(self, now: float) -> bool:
-        """Confirmed, and its label has held long enough to go into the running count."""
-        return self.confirmed(now) and self.last - self.label_since >= COUNT_SETTLE_SECONDS
+        """Confirmed, lying still, and its label has held long enough to go into the running count."""
+        return self.confirmed(now) and self.at_rest() and self.last - self.label_since >= COUNT_SETTLE_SECONDS
 
 
 class TableEngine:
@@ -354,6 +365,7 @@ class TableEngine:
             used_t.add(tid)
             code, conf, box, zone, angle = dets[di]
             self.tracks[tid].add(code, conf, box, now, zone, angle)
+            self._follow(self.tracks[tid], now)
 
         for di, (code, conf, box, zone, angle) in enumerate(dets):
             if di in used_d:
@@ -377,7 +389,25 @@ class TableEngine:
                 self._order += 1
                 t.order = self._order
             t.add(code, conf, box, now, zone, angle)
+            self._follow(t, now)
             self.tracks[t.id] = t
+
+    def _follow(self, t, now) -> None:
+        """Keep track of whether a card is moving (being dealt, slid or picked up) or lying
+        still. Once it has lain still for REST_SECONDS its seat is fixed; a big push frees it."""
+        b = t.box
+        c = ((b[0] + b[2]) / 2 * self.W, (b[1] + b[3]) / 2 * self.H)
+        if t.anchor is None:
+            t.anchor, t.rest_since = c, now
+        else:
+            moved = math.dist(c, t.anchor)
+            if moved > REST_MOVE * self.card_w:
+                if t.zone_locked and moved > UNLOCK_MOVE * self.card_w and not t.zone in ("discard", "shoe"):
+                    t.zone_locked = False
+                if not t.zone_locked or moved > UNLOCK_MOVE * self.card_w:
+                    t.anchor, t.rest_since = c, now
+        if not t.zone_locked and t.at_rest() and (t.zone == "dealer" or t.zone.startswith("seat")):
+            t.zone_locked = True
 
     def _hand_zone(self, box, zone: str) -> str:
         """A card lying on (or right against) a seat's cards belongs to that seat's hand, wherever
@@ -388,7 +418,7 @@ class TableEngine:
         cx, cy = (box[0] + box[2]) / 2 * self.W, (box[1] + box[3]) / 2 * self.H
         best, best_score = None, 0.0
         for t in self.tracks.values():
-            if not t.zone.startswith("seat") or not t.confirmed(t.last):
+            if not t.zone.startswith("seat") or not t.zone_locked or not t.confirmed(t.last):
                 continue
             overlap = _cover(box, t.box)
             tx, ty = (t.box[0] + t.box[2]) / 2 * self.W, (t.box[1] + t.box[3]) / 2 * self.H
@@ -641,7 +671,7 @@ class TableEngine:
 
     # ---- output --------------------------------------------------------------
     def _cards_in(self, zone: str, now=None):
-        ts = [t for t in self.tracks.values() if t.zone == zone and t.confirmed(t.last)]
+        ts = [t for t in self.tracks.values() if t.zone == zone and t.confirmed(t.last) and t.at_rest()]
         return sorted(ts, key=lambda t: t.order)
 
     def _signature(self):
