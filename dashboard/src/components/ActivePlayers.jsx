@@ -36,11 +36,11 @@ function PlayerSeat({ player, isSelf, compact, hideLabel, large }) {
 
   const seatMinHeight = large ? 210 : compact ? 110 : 142;
 
-  // Vacant = nobody was dealt in here. A seat that has a player but no cards
-  // right now (between rounds) says so, instead of showing a total of 0.
-  // A seat with cards always shows them, even before it counts as occupied.
+  // Vacant = nobody was dealt in here (seats are fixed when the dealer takes their
+  // first card). A seat that has a player but no cards right now (between rounds,
+  // or while the table is being cleared) says so, instead of showing a total of 0.
   const noCards = player.hands.every((h) => h.cards.length === 0);
-  if (noCards) {
+  if (!player.occupied || noCards) {
     return (
       <div
         className="hlo-panel"
@@ -135,7 +135,7 @@ function PlayerSeat({ player, isSelf, compact, hideLabel, large }) {
           {!hideLabel && (
             <span style={{ fontWeight: 700, fontSize: "0.85rem" }}>
               Seat {player.seat}
-              {isSelf ? " (you)" : ""}
+              {isSelf ? " (You)" : ""}
             </span>
           )}
           <span

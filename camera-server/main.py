@@ -22,8 +22,19 @@ def print_qr(url: str) -> None:
         pass
 
 
+class _IgnoreClientResets(logging.Filter):
+    """On Windows, asyncio logs a scary traceback ("ConnectionResetError: [WinError 10054]")
+    whenever a phone or browser drops its connection without saying goodbye (locked screen,
+    closed tab, Wi-Fi blip). Nothing is wrong: the server carries on. Hide just that one."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc = record.exc_info[1] if record.exc_info else None
+        return not isinstance(exc, (ConnectionResetError, ConnectionAbortedError))
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
+    logging.getLogger("asyncio").addFilter(_IgnoreClientResets())
     settings = load_settings()
 
     scheme = "https" if settings.tls else "http"

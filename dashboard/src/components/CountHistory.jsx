@@ -66,10 +66,47 @@ function ForceShuffleConfirm({ onCancel, onConfirm }) {
  *   mobile view leave this false, so they always show the full history.
  */
 export default function CountHistory({ showStats = true, masterView = false }) {
-  const { countHistory, countStats, shoeStats, isCountHistoryVisible, setIsCountHistoryVisible, forceShuffle, midShoeJoin } =
-    useAppState();
+  const {
+    countHistory,
+    countStats,
+    shoeStats,
+    isCountHistoryVisible,
+    setIsCountHistoryVisible,
+    forceShuffle,
+    midShoeJoin,
+    countHistoryExpanded,
+    setCountHistoryExpanded,
+  } = useAppState();
   const [confirmingShuffle, setConfirmingShuffle] = useState(false);
-  const [expanded, setExpanded] = useState(!masterView);
+  // "Show full history" is kept in the app state, so a shuffle (or anything that
+  // redraws this panel) doesn't fold it back to the current hand.
+  const expanded = masterView ? countHistoryExpanded : true;
+  const setExpanded = setCountHistoryExpanded;
+
+  // Hands are numbered from 1 after each shuffle. The hand kept from before the
+  // latest shuffle (as a reference) is labelled as such, not "Hand 0".
+  const handLabel = {};
+  {
+    const lastMarker = countHistory.reduce((acc, e, i) => (e.isShuffleMarker ? i : acc), -1);
+    let n = 0;
+    let previous = null;
+    countHistory.forEach((e, i) => {
+      if (e.isShuffleMarker) {
+        n = 0;
+        previous = null;
+        return;
+      }
+      if (i < lastMarker) {
+        handLabel[e.hand] = "Before shuffle";
+        return;
+      }
+      if (e.hand !== previous) {
+        n += 1;
+        previous = e.hand;
+        handLabel[e.hand] = `Hand ${n}`;
+      }
+    });
+  }
 
   // The hand in progress is the newest one in the history (the camera numbers
   // hands itself, so this can't be a fixed constant).
@@ -190,14 +227,17 @@ export default function CountHistory({ showStats = true, masterView = false }) {
           </p>
         )}
         <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
-          <div className="hlo-card-row" style={{ maxWidth: "100%", minWidth: 0 }}>
+          {/* One hand per row, newest on top, so short hands never sit side by side. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%", minWidth: 0 }}>
             {groups.map((group) =>
               group.isShuffleMarker ? (
                 <ShuffleMarkerCard key={group.key} />
               ) : (
                 <div key={group.key} className="hlo-hand-group">
                   <div className="hlo-hand-group__label">
-                    {group.hand === latestHand ? "Current hand" : `Hand ${group.hand}`}
+                    {group.hand === latestHand && handLabel[group.hand] !== "Before shuffle"
+                      ? `Current hand · ${handLabel[group.hand] || ""}`.replace(/ · $/, "")
+                      : handLabel[group.hand] || `Hand ${group.hand}`}
                   </div>
                   <div className="hlo-hand-group__cards">
                     {group.items.map(({ entry, idx }) =>

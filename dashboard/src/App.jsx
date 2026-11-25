@@ -36,7 +36,7 @@ function RequireSeat({ children }) {
 // dealt there in the latest round) and asks what to do: take another seat,
 // spectate, or leave. Only runs while the camera is live and the server has
 // actually read the seats, so a dropped connection never kicks anyone.
-const VACANCY_DELAY_MS = 4000;
+const VACANCY_DELAY_MS = 2000;
 
 function VacancyWatcher() {
   const { occupancy, selectedSeat, setSelectedSeat, startSpectating, logout, live, seatsKnown } = useAppState();

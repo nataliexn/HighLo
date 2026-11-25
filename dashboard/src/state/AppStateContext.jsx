@@ -206,6 +206,7 @@ export function AppStateProvider({ children }) {
   const holding = live && !rawLive;
   const cameraConnected = live || Boolean(config.CAMERA_STREAM_URL);
   const [isCountHistoryVisible, setIsCountHistoryVisible] = useState(true);
+  const [countHistoryExpanded, setCountHistoryExpanded] = useState(false);
 
   // Controls whether the Recommendation component shows every seat's
   // recommendation as each turn happens ("all") or only surfaces one when
@@ -291,29 +292,44 @@ export function AppStateProvider({ children }) {
     () => (dealerFinished(corrected.dealer) ? buildRoundResults(corrected.players, corrected.dealer) : null),
     [corrected]
   );
-  // Once shown, the results stay put while the cards are cleared away (taking cards
-  // off would otherwise change totals and flip the results), and go once the
-  // table is empty, back to "waiting for the next round".
+  // Clearing the table: once the round's results are in and cards start coming off
+  // (two or more gone), every seat goes straight to "waiting for cards" instead of
+  // showing results that change as each card is lifted. That lasts until the table
+  // is empty, or new cards are being dealt.
   const cardsOnTable =
     players.reduce((n, p) => n + p.hands.reduce((m, h) => m + h.cards.length, 0), 0) + dealer.cards.length;
-  const resultsLock = useRef({ shown: false, cards: 0 });
+  const [clearing, setClearing] = useState(false);
+  const clearRef = useRef({ shown: false, peak: 0, low: Infinity });
+  function resetClearing() {
+    clearRef.current = { shown: false, peak: 0, low: Infinity };
+    setClearing(false);
+  }
   useEffect(() => {
-    const lock = resultsLock.current;
+    const c = clearRef.current;
     if (cardsOnTable === 0) {
-      lock.shown = false;
-      lock.cards = 0;
+      resetClearing();
       setRoundResults(null);
       return;
     }
-    if (liveResults && liveResults.length && (!lock.shown || cardsOnTable >= lock.cards)) {
-      lock.shown = true; // first time, or a card was corrected / added while nothing is being cleared
-      lock.cards = cardsOnTable;
+    if (clearing) {
+      c.low = Math.min(c.low, cardsOnTable);
+      if (cardsOnTable >= c.low + 2) resetClearing(); // new cards coming out: the next round
+      return;
+    }
+    if (liveResults && liveResults.length) {
+      c.shown = true;
+      c.peak = Math.max(c.peak, cardsOnTable);
       setRoundResults(liveResults);
-    } else if (!lock.shown) {
+    } else if (!c.shown) {
       setRoundResults(null); // dealer still drawing
     }
-    // shown and cards are going: the table is being cleared, keep the results as they were
-  }, [liveResults, cardsOnTable]);
+    if (c.shown && cardsOnTable <= c.peak - 2) {
+      c.low = cardsOnTable;
+      setClearing(true);
+      setRoundResults(null);
+    }
+  }, [liveResults, cardsOnTable, clearing]);
+
   // ---- Whose turn (manual adjust) ----------------------------------------
   // The camera guesses whose turn it is from the cards. Previous / Next player
   // (Active Players panel) move it by hand, for this viewer. The adjustment
@@ -358,6 +374,17 @@ export function AppStateProvider({ children }) {
     const to = Math.max(0, Math.min(turnOrder.length - 1, from + direction));
     setTurnOverride({ ...turnOrder[to], base: detectedTurn });
   }
+  const tableView = useMemo(() => {
+    if (!clearing) return { players: playersView, dealer };
+    return {
+      players: playersView.map((p) => ({
+        ...p,
+        isTurn: false,
+        hands: [{ cards: [], ids: [], isBust: false, isSplit: false, isDoubled: false, isTurn: false }],
+      })),
+      dealer: { ...dealer, cards: [], ids: [], holeCardKnown: false },
+    };
+  }, [clearing, playersView, dealer]);
   const turnControls = {
     canPrevious: turnOrder.length > 0 && currentTurnIndex !== 0,
     canNext: turnOrder.length > 0 && currentTurnIndex !== turnOrder.length - 1,
@@ -491,7 +518,7 @@ export function AppStateProvider({ children }) {
         round.played = false;
         setLocalCorrections({}); // corrections belong to the round they were made in
         setRoundResults(null);
-        resultsLock.current = { shown: false, cards: 0 };
+        resetClearing();
         setTurnOverride(null);
       }
       if (event.roundActive && me.selectedSeat && event.players) {
@@ -612,9 +639,9 @@ export function AppStateProvider({ children }) {
       isDemo,
       seatsKnown,
       occupancy,
-      players: playersView,
+      players: tableView.players,
       turnControls,
-      dealer,
+      dealer: tableView.dealer,
       recommendation,
       countHistory: countHistoryView,
       countStats,
@@ -626,6 +653,8 @@ export function AppStateProvider({ children }) {
       cameraConnected,
       isCountHistoryVisible,
       setIsCountHistoryVisible,
+      countHistoryExpanded,
+      setCountHistoryExpanded,
       recommendationScope,
       setRecommendationScope,
       roundOutcomes,
@@ -650,6 +679,7 @@ export function AppStateProvider({ children }) {
       occupancy,
       players,
       playersView,
+      tableView,
       turnControls,
       dealer,
       recommendation,
@@ -661,6 +691,7 @@ export function AppStateProvider({ children }) {
       midShoeJoin,
       cameraConnected,
       isCountHistoryVisible,
+      countHistoryExpanded,
       recommendationScope,
       roundOutcomes,
       roundResults,

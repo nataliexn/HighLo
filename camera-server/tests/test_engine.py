@@ -1,5 +1,5 @@
 """python -m unittest discover -s tests -v"""
-import json, sys, unittest
+import json, math, sys, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -157,11 +157,13 @@ class EngineTests(unittest.TestCase):
         self.deal([4, 5], t)                              # seat 2 is not dealt this time
         self.assertEqual(self.occupied(), [4, 5])
 
-    def test_seat_with_a_card_is_selectable_before_the_deal_is_complete(self):
+    def test_seats_are_fixed_by_the_dealers_first_card(self):
         t = self.deal([2], self.warm())
         t = run(self.e, [], t, 6)
-        run(self.e, [det("6S", 0.46, 0.19), det("9H", *SEAT[5])], t, 4)   # only part of a deal is out
-        self.assertEqual(self.occupied(), [2, 5])    # seat 5 has a card; seat 2 isn't dropped until the deal completes
+        t = run(self.e, [det("9H", *SEAT[5])], t, 3)                      # first pass: seat 5 only so far
+        self.assertEqual(self.occupied(), [2, 5])    # seat 2 isn't dropped before the dealer's card
+        run(self.e, [det("6S", 0.46, 0.19), det("9H", *SEAT[5])], t, 3)   # the dealer's first card
+        self.assertEqual(self.occupied(), [5])       # seat 2 wasn't dealt in: vacant
 
     def test_first_round_seats_show_from_the_first_card(self):
         run(self.e, [det("6S", 0.46, 0.19), det("9H", *SEAT[3]), det("4D", *SEAT[6])], self.warm(), 3)
@@ -169,11 +171,11 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(s["seatsKnown"])
         self.assertEqual(self.occupied(), [3, 6])
 
-    def test_seat_dealt_late_is_still_added(self):
-        t = self.deal([2, 5], self.warm())              # deal looks complete without seat 4
+    def test_no_seat_opens_after_the_dealers_first_card(self):
+        t = self.deal([2, 5], self.warm())              # seats fixed: 2 and 5
         x, y = SEAT[4]
         self.deal([2, 5], t, extra=[det("9H", x, y), det("5C", x + 0.04, y + 0.05)])
-        self.assertEqual(self.occupied(), [2, 4, 5])
+        self.assertEqual(self.occupied(), [2, 5])
 
     def split_deal(self, apart):
         x, y = SEAT[3]
@@ -338,6 +340,29 @@ class EngineTests(unittest.TestCase):
         t = run(self.e, self.table(), self.warm(), 4)
         run(self.e, [], t, 3.5)
         self.assertFalse(self.e.state()["roundActive"])
+
+    def test_long_hand_stays_in_its_seat(self):
+        x, y = SEAT[2]
+        a = math.radians(CAL["zones"]["seats"][4]["angle"])            # seat 2's upright
+        up = (math.sin(a) * 0.205 * 0.38 * 608 / 1080, -math.cos(a) * 0.205 * 0.38)   # a card's step towards the dealer
+        cards = []
+        t = run(self.e, [det("6S", 0.46, 0.19), det("back", 0.57, 0.19)], self.warm(), 1)
+        for i, code in enumerate(["2C", "3D", "4H", "2S", "3C", "AH", "AD"]):
+            cards.append(det(code, x + up[0] * i, y + 0.09 + up[1] * i))   # each on top, nearer the dealer
+            t = run(self.e, [det("6S", 0.46, 0.19), det("back", 0.57, 0.19), *cards], t, 2)
+        s = self.e.state()
+        self.assertEqual(s["players"][1]["hands"][0]["cards"], ["2C", "3D", "4H", "2S", "3C", "AH", "AD"])
+        self.assertEqual(s["dealer"]["cards"], ["6S", "??"])
+        self.assertEqual(self.occupied(), [2])
+
+    def test_sideways_double_does_not_open_another_seat(self):
+        x, y = SEAT[3]
+        base = [det("6S", 0.46, 0.19), det("back", 0.57, 0.19), det("5H", x, y + 0.08), det("6C", x + 0.02, y)]
+        t = run(self.e, base, self.warm(), 4)
+        run(self.e, base + [det("KD", x - 0.06, y - 0.05, w=0.2, h=0.15)], t, 3)   # sticks out towards seat 4
+        s = self.e.state()
+        self.assertEqual(s["players"][2]["hands"][0]["cards"], ["5H", "6C", "KD"])
+        self.assertEqual(self.occupied(), [3])
 
     def test_hand_total(self):
         self.assertEqual(hand_total(["AS", "KH"]), 21)

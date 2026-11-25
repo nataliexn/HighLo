@@ -1,11 +1,11 @@
 import React, { useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useAppState } from "../state/AppStateContext.jsx";
+import { fixCard, useAppState } from "../state/AppStateContext.jsx";
 import { basicStrategyAction, buildStrategyRow, handTypeLabel, recommend } from "../lib/strategy.js";
 import StrategyChartButton from "./StrategyChart.jsx";
 import { insuranceAdvice } from "../lib/count.js";
 import { parseCard } from "./Card.jsx";
-import { RESULT_STYLE } from "../lib/outcome.js";
+import { dealerFinished } from "../lib/outcome.js";
 import {
   dealerBustProbability,
   detectionConfidence,
@@ -172,75 +172,6 @@ function HandChartRow({ cards, dealerUpCode }) {
 }
 
 /**
- * RoundResultCard
- * Shown in place of the recommendation once the dealer stands on 17+ or
- * busts, until the table is cleared. The viewer's own hand(s) first and
- * large, then every other hand at the table as a short line. A split hand
- * is its own result. Green: win, blue: push, red: loss or bust.
- */
-function resultDetail(r) {
-  if (r.result === "bust") return `Bust with ${r.player}`;
-  if (r.dealerBust) return `${r.player}, dealer busts with ${r.dealer}`;
-  return `${r.player} vs dealer ${r.dealer}`;
-}
-
-function RoundResultCard({ results, selectedSeat, mobile }) {
-  const mine = results.filter((r) => r.seat === selectedSeat);
-  const others = results.filter((r) => r.seat !== selectedSeat);
-  const handName = (r) => `Seat ${r.seat}${r.isSplit ? ` · hand ${r.handIndex + 1}` : ""}${r.isDoubled ? " · doubled" : ""}`;
-
-  return (
-    <div>
-      <div style={{ fontSize: "0.72rem", color: "var(--white-faint)", marginBottom: 8 }}>Round over</div>
-      {mine.map((r) => {
-        const style = RESULT_STYLE[r.result];
-        return (
-          <div key={`${r.seat}-${r.handIndex}`} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
-            <div
-              className={mobile ? "hlo-action-box--fixed" : ""}
-              style={{
-                display: "inline-block",
-                background: style.color,
-                color: "var(--white)",
-                fontFamily: "var(--font-display)",
-                fontSize: mobile ? "2.1rem" : "2.4rem",
-                letterSpacing: "0.04em",
-                padding: mobile ? "12px 10px" : "10px 30px",
-                borderRadius: "var(--radius-md)",
-                boxShadow: "0 4px 14px rgba(0,0,0,0.35)",
-              }}
-            >
-              {style.label}
-            </div>
-            <div>
-              <div style={{ fontSize: "0.72rem", color: "var(--white-faint)" }}>{handName(r)} (you)</div>
-              <div style={{ fontFamily: "var(--font-display)", fontSize: "1.3rem" }}>{resultDetail(r)}</div>
-            </div>
-          </div>
-        );
-      })}
-      {others.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: mine.length ? 4 : 0 }}>
-          {others.map((r) => {
-            const style = RESULT_STYLE[r.result];
-            return (
-              <div key={`${r.seat}-${r.handIndex}`} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: "0.8rem" }}>
-                <b style={{ color: style.color, fontFamily: "var(--font-display)", fontSize: "1rem", minWidth: 92, letterSpacing: "0.04em" }}>
-                  {style.label}
-                </b>
-                <span style={{ color: "var(--white-dim)" }}>
-                  {handName(r)}: {resultDetail(r)}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
  * RecommendationPanel
  * `mobile`: renders the compact, mobile-focused variant — forced to "my
  *   turn only" (no scope toggle at all), a bigger fixed-width action box,
@@ -267,7 +198,7 @@ export default function RecommendationPanel({ mobile = false, fillHeight = false
     setRecommendationScope,
     countStats,
     isSpectating,
-    roundResults,
+    localCorrections,
   } = useAppState();
   const [mobileExpanded, setMobileExpanded] = useState(false);
 
@@ -278,11 +209,24 @@ export default function RecommendationPanel({ mobile = false, fillHeight = false
   const displayedPlayer =
     activeTurnPlayer && (!showForSelfOnly || activeTurnPlayer.seat === selectedSeat) ? activeTurnPlayer : null;
 
-  // With a split, the hand being played is the one marked isTurn.
-  const activeHand = displayedPlayer
+  // With a split, the hand being played is the one marked isTurn. The cards are
+  // exactly the ones shown on screen, including this viewer's corrections, so the
+  // recommendation never works from a different hand than the one you see.
+  const turnHand = displayedPlayer
     ? displayedPlayer.hands.find((h) => h.isTurn) || displayedPlayer.hands[displayedPlayer.hands.length - 1]
     : null;
-  const dealerUpCard = dealer.cards[0];
+  const turnHandIndex = displayedPlayer && turnHand ? displayedPlayer.hands.indexOf(turnHand) : 0;
+  const activeHand = turnHand
+    ? {
+        ...turnHand,
+        cards: turnHand.cards.map((c, i) =>
+          fixCard(localCorrections, displayedPlayer.seat, turnHandIndex, i, c, (turnHand.ids || [])[i])
+        ),
+      }
+    : null;
+  const dealerUpCard = dealer.cards[0]
+    ? fixCard(localCorrections, "dealer", 0, 0, dealer.cards[0], (dealer.ids || [])[0])
+    : undefined;
 
   // The move comes from the basic-strategy chart; with a trusted count it may
   // switch to a count-based play. After a mid-shoe join the count is missing
@@ -368,18 +312,12 @@ export default function RecommendationPanel({ mobile = false, fillHeight = false
           </div>
         )}
 
-        {roundResults && roundResults.length > 0 ? (
-          <RoundResultCard
-            results={roundResults}
-            selectedSeat={selectedSeat}
-            mobile={mobile}
-          />
-        ) : displayedPlayer ? (
+        {displayedPlayer ? (
           <>
             {!mobile && (
               <div style={{ fontSize: "0.72rem", color: "var(--white-faint)", marginBottom: 8 }}>
                 Seat {displayedPlayer.seat}
-                {displayedPlayer.seat === selectedSeat ? " (you)" : ""}
+                {displayedPlayer.seat === selectedSeat ? " (You)" : ""}
                 {displayedPlayer.hands.length > 1 ? ` · Split hand ${displayedPlayer.hands.indexOf(activeHand) + 1}` : ""}'s turn
               </div>
             )}
@@ -506,7 +444,7 @@ export default function RecommendationPanel({ mobile = false, fillHeight = false
           </>
         ) : (
           <p style={{ color: "var(--white-faint)", fontSize: "0.85rem" }}>
-            {dealer.cards.length === 0
+            {dealer.cards.length === 0 || dealerFinished(dealer)
               ? "Waiting for the next round to start."
               : showForSelfOnly
               ? "Recommendation hidden until it's your turn."
